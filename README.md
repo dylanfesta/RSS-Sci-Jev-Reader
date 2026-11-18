@@ -47,7 +47,12 @@ cargo run --manifest-path src-tauri/Cargo.toml
 ./src-tauri/target/debug/smart-rss-reader queries list
 ```
 
+## Acknowledgments
+
+This work was supported in part by complimentary access to Google Antigravity and Gemini 4 Carbon to accelerate scientific workflows.
+
 ## License
 
 This project is dedicated to the public domain under **[CC0 1.0 Universal (CC0-1.0)](./LICENSE)**. You may copy, modify, distribute, and use the work, even for commercial purposes, all without asking permission—provided strictly **as-is**, without warranty of any kind.
+
 
