@@ -1,5 +1,13 @@
 # SmartRSSReader (Multi-Platform Tauri v2 Desktop App)
 
+[![License: CC0-1.0](https://img.shields.io/badge/License-CC0_1.0-lightgrey.svg)](http://creativecommons.org/publicdomain/zero/1.0/)
+[![Status: Experimental Alpha](https://img.shields.io/badge/status-alpha%20%2F%20untested-orange.svg)](#)
+
+> [!WARNING]
+> **Experimental Alpha Software — Untested & Provided As-Is**
+>
+> This software is in an **early alpha** stage of development. It is largely **untested** across diverse environments, operating systems, and edge cases. Expect rough edges, breaking changes, potential bugs, or incomplete behavior. Use at your own risk!
+
 A self-contained, multi-platform (**Linux, macOS, Windows**) scientific journal RSS reader and relevance ranker built with **Tauri v2 (Rust + Webview)**, powered by **OpenRouter's TypeSafe Jev** decision model (`typesafe/jev-1.14` via `POST https://openrouter.ai/api/alpha/decisions`).
 
 Fully equivalent in every aspect to the reference `SmartRSSReader` implementation—including dark/light mode, SQLite WAL persistence, 30-day archive memory, historical query snapshots, and AES-256-GCM API key encryption—while providing a **self-contained Data & AI Skills Folder** (`~/SmartRSSReader` by default) so AI agents can interact with your feeds and Jev queries without installing system-wide skills.
@@ -38,3 +46,8 @@ cargo run --manifest-path src-tauri/Cargo.toml
 ./src-tauri/target/debug/smart-rss-reader feeds list
 ./src-tauri/target/debug/smart-rss-reader queries list
 ```
+
+## License
+
+This project is dedicated to the public domain under **[CC0 1.0 Universal (CC0-1.0)](./LICENSE)**. You may copy, modify, distribute, and use the work, even for commercial purposes, all without asking permission—provided strictly **as-is**, without warranty of any kind.
+

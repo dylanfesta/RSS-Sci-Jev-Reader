@@ -1,0 +1,87 @@
+name: Build & Publish Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing or new Git tag to publish to (e.g., v0.1.0-alpha.1)"
+        required: true
+        type: string
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+          - platform: windows-latest
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            xdg-utils
+
+      - name: Install frontend CLI dependencies
+        run: npm install
+
+      - name: Run Rust unit tests (Linux/Windows/native)
+        if: matrix.args == ''
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build and upload Tauri release bundles
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ inputs.tag_name || github.ref_name }}
+          releaseName: "SmartRSSReader ${{ inputs.tag_name || github.ref_name }}"
+          tauriScript: npm run tauri
+          releaseBody: |
+            > ⚠️ **Experimental Alpha Software — Untested & Provided As-Is**
+            >
+            > SmartRSSReader is currently in an **early alpha** stage and largely **untested** across operating systems, hardware setups, and edge cases. Expect rough edges, breaking changes, and bugs. Provided under CC0-1.0 without warranty of any kind—use at your own risk!
+
+            See the attached assets below to download installers/binaries for Linux, macOS (Apple Silicon & Intel), and Windows.
+          releaseDraft: false
+          prerelease: true
+          args: ${{ matrix.args }}
