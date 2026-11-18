@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# SmartRSSReader (Tauri) — Local Agent CLI Wrapper
+set -e
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+RELEASE_BIN="$SCRIPT_DIR/src-tauri/target/release/smart-rss-reader"
+DEBUG_BIN="$SCRIPT_DIR/src-tauri/target/debug/smart-rss-reader"
+
+if [ -x "$RELEASE_BIN" ]; then
+  exec "$RELEASE_BIN" "$@"
+elif [ -x "$DEBUG_BIN" ]; then
+  exec "$DEBUG_BIN" "$@"
+else
+  exec cargo run --quiet --manifest-path "$SCRIPT_DIR/src-tauri/Cargo.toml" -- "$@"
+fi

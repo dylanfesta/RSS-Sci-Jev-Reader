@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>SmartRSSReader — Scientific RSS and Jev Relevance Ranker</title>
+  <script>
+    (function () {
+      try {
+        const saved = localStorage.getItem("smart_rss_theme") || "dark";
+        document.documentElement.setAttribute("data-theme", saved);
+        const meta = document.querySelector('meta[name="color-scheme"]');
+        if (meta) meta.content = saved === "light" ? "light" : "dark";
+      } catch (_e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon" aria-hidden="true">⚛</div>
+      <div>
+        <h1>SmartRSSReader</h1>
+        <p class="subtitle">Scientific Journal Feeds Ranked by OpenRouter TypeSafe Jev</p>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <div class="memory-pill" title="Entries remembered in SQLite (Active + Archived) are skipped on future feed updates">
+        <span>Memory:</span>
+        <strong id="stat-total-remembered">0</strong> seen
+        (<span id="stat-active-count">0</span> active · <span id="stat-archived-count">0</span> archived)
+        <button
+          type="button"
+          class="btn-tiny-reset"
+          id="btn-reset-all"
+          title="Delete all active and archived RSS entries and start over blank"
+        >
+          Reset All
+        </button>
+      </div>
+
+      <div class="auth-status-box" id="auth-status-box">
+        <span class="status-dot locked" id="auth-status-dot"></span>
+        <span id="auth-status-text">API Key Locked</span>
+        <button
+          type="button"
+          class="btn btn-xs btn-ghost"
+          id="btn-header-provider-link"
+          title="Open active AI provider dashboard / API key portal"
+        >
+          ↗ Provider
+        </button>
+        <button type="button" class="btn btn-sm btn-secondary" id="btn-open-auth">Unlock / Key</button>
+      </div>
+
+      <button
+        type="button"
+        class="btn btn-sm btn-info-pill"
+        id="btn-toggle-ai-info"
+        aria-expanded="false"
+        title="Show or hide the AI Skills Folder and About frame"
+      >
+        🤖 AI Skills &amp; Info
+      </button>
+
+      <button type="button" class="btn btn-sm btn-secondary" id="btn-theme-toggle" title="Toggle Dark / Light theme">
+        🌙 Dark
+      </button>
+    </div>
+  </header>
+
+  <!-- EXPANDABLE INFO / ABOUT & AI SKILLS WORKSPACE FRAME -->
+  <section class="info-frame-wrapper" aria-label="AI Skills Workspace and Application Info">
+    <details id="ai-skills-info-frame" class="info-expandable-frame">
+      <summary class="info-frame-summary">
+        <div class="summary-left">
+          <span class="expand-chevron" aria-hidden="true">▶</span>
+          <span class="info-badge">AI Skills &amp; About</span>
+          <strong>Interact via AI Agents directly from your Data Folder — No system-wide skills needed</strong>
+          <code id="info-summary-folder-path">~/SmartRSSReader</code>
+        </div>
+        <div class="summary-right">
+          <span class="status-pill-ok" id="info-skills-status-pill">✓ Skills Provisioned</span>
+        </div>
+      </summary>
+
+      <div class="info-frame-body">
+        <div class="info-grid-3">
+          <!-- Column 1: Data & AI Skills Folder Management -->
+          <div class="info-panel-card">
+            <div class="info-card-title-row">
+              <strong>📁 1. Your Data &amp; AI Skills Folder</strong>
+              <span class="badge">SQLite WAL + Skills</span>
+            </div>
+            <p class="section-desc">
+              This single folder stores your database (<code>smart_rss.db</code>), encrypted key (<code>secrets.enc</code>), local CLI (<code>./smart-rss</code>), and ready-to-use AI skills (<code>.agents/skills/</code> &amp; <code>AGENTS.md</code>).
+            </p>
+
+            <div class="folder-path-box">
+              <code id="info-full-folder-path">Loading...</code>
+            </div>
+
+            <div class="info-actions-row">
+              <button type="button" class="btn btn-xs btn-primary" id="btn-copy-folder-path">📋 Copy Path</button>
+              <button type="button" class="btn btn-xs btn-secondary" id="btn-open-data-folder">📂 Open Folder</button>
+              <button type="button" class="btn btn-xs btn-outline" id="btn-toggle-change-folder">📁 Change Folder...</button>
+              <button type="button" class="btn btn-xs btn-ghost" id="btn-resync-skills" title="Re-create AGENTS.md, .agents/skills/*, and ./smart-rss in this folder">
+                ↻ Re-sync Skills
+              </button>
+            </div>
+
+            <form id="change-folder-form" class="change-folder-box hidden">
+              <label for="new-data-folder-input" class="muted-label">Enter new folder path for Data &amp; AI Skills:</label>
+              <div class="input-with-btn">
+                <input type="text" id="new-data-folder-input" class="input input-sm" placeholder="/home/user/SmartRSSReader" required />
+                <button type="submit" class="btn btn-xs btn-primary">Apply</button>
+                <button type="button" class="btn btn-xs btn-ghost" id="btn-cancel-change-folder">Cancel</button>
+              </div>
+            </form>
+
+            <ul class="provisioned-files-list" id="provisioned-files-list">
+              <li><code>smart_rss.db</code> &amp; <code>secrets.enc</code> — Local SQLite WAL &amp; AES-256-GCM key</li>
+              <li><code>.agents/skills/manage-rss-feeds/SKILL.md</code> — Feed discovery &amp; management skill</li>
+              <li><code>.agents/skills/manage-jev-queries/SKILL.md</code> — Jev query &amp; weight tuning skill</li>
+              <li><code>./smart-rss</code> &amp; <code>AGENTS.md</code> — Local Agent CLI &amp; documentation</li>
+            </ul>
+          </div>
+
+          <!-- Column 2: How to Use with AI Agents + Copyable Prompts -->
+          <div class="info-panel-card">
+            <div class="info-card-title-row">
+              <strong>🤖 2. Use with Any AI Coding Assistant</strong>
+              <span class="badge">Live Sync</span>
+            </div>
+            <p class="section-desc">
+              Open <strong>Antigravity</strong>, <strong>Claude Code</strong>, <strong>Cursor</strong>, <strong>Codex</strong>, or <strong>Gemini CLI</strong> inside the folder above. The agent automatically loads the local skills—and any change it makes updates this window <strong>live</strong>!
+            </p>
+
+            <div class="prompt-cards-list">
+              <div class="copy-prompt-item">
+                <div class="copy-prompt-text">
+                  <span class="muted-label">Try asking your AI agent:</span>
+                  <code>"Add the Nature Neuroscience and Neuron RSS feeds, and test them first."</code>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-secondary btn-copy-snippet"
+                  data-copy="Add the Nature Neuroscience and Neuron RSS feeds, and test them first."
+                >
+                  Copy
+                </button>
+              </div>
+
+              <div class="copy-prompt-item">
+                <div class="copy-prompt-text">
+                  <span class="muted-label">Create &amp; weight Jev queries:</span>
+                  <code>"Create a Jev rubric query for Single-Cell &amp; Spatial Omics with weight +2.5, and penalize fMRI/EEG papers with weight -1.5."</code>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-secondary btn-copy-snippet"
+                  data-copy="Create a Jev rubric query for Single-Cell & Spatial Omics with weight +2.5, and penalize fMRI/EEG papers with weight -1.5."
+                >
+                  Copy
+                </button>
+              </div>
+
+              <div class="copy-prompt-item">
+                <div class="copy-prompt-text">
+                  <span class="muted-label">Or run the local CLI directly in that folder:</span>
+                  <code>./smart-rss feeds list &amp;&amp; ./smart-rss queries list</code>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-secondary btn-copy-snippet"
+                  data-copy="./smart-rss feeds list && ./smart-rss queries list"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Column 3: About SmartRSSReader & Jev Ranking -->
+          <div class="info-panel-card">
+            <div class="info-card-title-row">
+              <strong>⚛ 3. About SmartRSSReader</strong>
+              <span class="badge badge-muted">v0.1.0 Tauri</span>
+            </div>
+            <ul class="about-feature-list">
+              <li>
+                <strong>TypeSafe Jev Ranking:</strong> Evaluates binary <code>noul</code> (Yes/No probability) and multi-level <code>score</code> rubrics via OpenRouter's Decisions API (<code>typesafe/jev-1.14</code>), normalizing outcomes to <code>[0.0, 1.0]</code>.
+              </li>
+              <li>
+                <strong>Instant Re-Weighting &amp; Penalties:</strong> Positive weights boost relevant papers; negative weights (e.g. <code>-1.0</code>) penalize unwanted topics. Changing any weight re-ranks all papers offline immediately.
+              </li>
+              <li>
+                <strong>Incremental Memory &amp; 30-Day Archive:</strong> Seen and archived papers are remembered by SHA-256 UID so updates only score genuinely new papers. Archived items older than 30 days are auto-pruned.
+              </li>
+              <li>
+                <strong>Historical Snapshots &amp; Local Security:</strong> Editing or deleting a query preserves the exact snapshot on previously scored papers. Your API key is encrypted locally with <code>PBKDF2-HMAC-SHA256</code> + <code>AES-256-GCM</code>.
+              </li>
+            </ul>
+            <div class="info-footer-actions">
+              <button type="button" class="btn btn-xs btn-ghost" id="btn-close-info-frame">Hide Info Frame ▲</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <nav class="main-nav" aria-label="Primary Navigation">
+    <button type="button" class="nav-tab active" data-tab="tab-ranked">
+      Ranked Feed <span class="badge" id="nav-badge-active">0</span>
+    </button>
+    <button type="button" class="nav-tab" data-tab="tab-archive">
+      Archive <span class="badge badge-muted" id="nav-badge-archived">0</span>
+    </button>
+    <button type="button" class="nav-tab" data-tab="tab-feeds">
+      RSS Feeds <span class="badge badge-muted" id="nav-badge-feeds">0</span>
+    </button>
+    <button type="button" class="nav-tab" data-tab="tab-queries">
+      Jev Queries &amp; Tester <span class="badge badge-muted" id="nav-badge-queries">0</span>
+    </button>
+    <button type="button" class="nav-tab" data-tab="tab-settings">
+      Settings
+    </button>
+  </nav>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <main class="app-main">
+    <!-- TAB 1: RANKED ACTIVE ENTRIES -->
+    <section id="tab-ranked" class="tab-panel active">
+      <div class="toolbar-card">
+        <div class="toolbar-row">
+          <div class="toolbar-actions">
+            <button type="button" class="btn btn-primary" id="btn-refresh-feeds">
+              ↻ Update Feeds (New Entries Only)
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-score-unscored" title="Evaluate active entries that are missing scores for any enabled Jev query">
+              ⚡ Score Unscored Active
+            </button>
+          </div>
+
+          <search class="toolbar-filters">
+            <input type="search" id="active-search-input" class="input" placeholder="Search title, abstract, authors..." aria-label="Search active entries" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            <div class="journal-multiselect" id="active-journal-multiselect">
+              <button
+                type="button"
+                class="journal-multiselect-trigger"
+                id="active-feed-filter-btn"
+                aria-expanded="false"
+                aria-controls="active-feed-filter-panel"
+              >
+                <span class="journal-multiselect-label" id="active-feed-filter-label">All Journals / Feeds</span>
+                <span class="journal-multiselect-chevron" aria-hidden="true">▾</span>
+              </button>
+              <div class="journal-multiselect-panel hidden" id="active-feed-filter-panel">
+                <div class="journal-multiselect-header">
+                  <div class="journal-multiselect-master">
+                    <input type="checkbox" id="active-feed-master-cb" class="checkbox-custom" checked />
+                    <label for="active-feed-master-cb">All Journals</label>
+                  </div>
+                  <div class="journal-multiselect-bulk">
+                    <button type="button" class="btn btn-xs btn-ghost" id="active-feed-select-all">Select all</button>
+                    <button type="button" class="btn btn-xs btn-ghost" id="active-feed-select-none">Select none</button>
+                  </div>
+                </div>
+                <div class="journal-multiselect-search-wrap">
+                  <input
+                    type="search"
+                    id="active-feed-option-search"
+                    class="input input-sm"
+                    placeholder="Filter journals..."
+                    aria-label="Filter active journal list"
+                    autocorrect="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                  />
+                </div>
+                <fieldset class="journal-multiselect-fieldset">
+                  <legend class="visually-hidden">Select journals to display in Ranked Feed</legend>
+                  <div class="journal-multiselect-list" id="active-feed-options-list"></div>
+                </fieldset>
+              </div>
+            </div>
+          </search>
+        </div>
+
+        <div class="toolbar-subrow">
+          <div id="refresh-summary-banner" class="refresh-banner hidden"></div>
+          <div class="bulk-archive-controls">
+            <label for="bulk-threshold-input" class="muted-label">Archive active entries below:</label>
+            <input type="number" id="bulk-threshold-input" class="input input-xs" value="35" min="-100" max="100" step="5" />
+            <span class="muted-label">%</span>
+            <button type="button" class="btn btn-xs btn-outline" id="btn-archive-below">Archive Below %</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="active-entries-list" class="entries-list"></div>
+    </section>
+
+    <!-- TAB 2: ARCHIVED ENTRIES -->
+    <section id="tab-archive" class="tab-panel">
+      <div class="toolbar-card">
+        <div class="toolbar-row">
+          <div>
+            <h2 class="section-title">Archived Entries</h2>
+            <p class="section-desc">
+              Archived papers remain in SQLite memory for 1 month (30 days) so updating RSS feeds won't re-evaluate them, and are automatically removed after 1 month when opening the app.
+            </p>
+          </div>
+          <search class="toolbar-filters">
+            <input type="search" id="archive-search-input" class="input" placeholder="Search archived papers..." aria-label="Search archived entries" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            <div class="journal-multiselect" id="archive-journal-multiselect">
+              <button
+                type="button"
+                class="journal-multiselect-trigger"
+                id="archive-feed-filter-btn"
+                aria-expanded="false"
+                aria-controls="archive-feed-filter-panel"
+              >
+                <span class="journal-multiselect-label" id="archive-feed-filter-label">All Journals / Feeds</span>
+                <span class="journal-multiselect-chevron" aria-hidden="true">▾</span>
+              </button>
+              <div class="journal-multiselect-panel hidden" id="archive-feed-filter-panel">
+                <div class="journal-multiselect-header">
+                  <div class="journal-multiselect-master">
+                    <input type="checkbox" id="archive-feed-master-cb" class="checkbox-custom" checked />
+                    <label for="archive-feed-master-cb">All Journals</label>
+                  </div>
+                  <div class="journal-multiselect-bulk">
+                    <button type="button" class="btn btn-xs btn-ghost" id="archive-feed-select-all">Select all</button>
+                    <button type="button" class="btn btn-xs btn-ghost" id="archive-feed-select-none">Select none</button>
+                  </div>
+                </div>
+                <div class="journal-multiselect-search-wrap">
+                  <input
+                    type="search"
+                    id="archive-feed-option-search"
+                    class="input input-sm"
+                    placeholder="Filter journals..."
+                    aria-label="Filter archived journal list"
+                    autocorrect="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                  />
+                </div>
+                <fieldset class="journal-multiselect-fieldset">
+                  <legend class="visually-hidden">Select journals to display in Archive</legend>
+                  <div class="journal-multiselect-list" id="archive-feed-options-list"></div>
+                </fieldset>
+              </div>
+            </div>
+          </search>
+        </div>
+      </div>
+
+      <div id="archived-entries-list" class="entries-list"></div>
+    </section>
+
+    <!-- TAB 3: EXPANDABLE RSS FEEDS LIST + TEST/PREVIEW -->
+    <section id="tab-feeds" class="tab-panel">
+      <div class="split-header">
+        <div>
+          <h2 class="section-title">Scientific Journal RSS Feeds</h2>
+          <p class="section-desc">
+            Click any feed row to expand its settings, edit its URL, or run a live <strong>Test / Preview</strong> of its entries.
+          </p>
+        </div>
+        <button type="button" class="btn btn-primary" id="btn-toggle-new-feed">+ Add RSS Feed</button>
+      </div>
+
+      <form id="new-feed-form" class="card form-card hidden">
+        <h3>Add New RSS / Atom Feed</h3>
+        <div class="form-grid-3">
+          <div class="field">
+            <label for="new-feed-title">Journal / Feed Title</label>
+            <input type="text" id="new-feed-title" class="input" placeholder="e.g. Physical Review Letters" required />
+          </div>
+          <div class="field">
+            <label for="new-feed-url">RSS / Atom Feed URL</label>
+            <input type="url" id="new-feed-url" class="input" placeholder="https://feeds.aps.org/rss/recent/prl.xml" required />
+          </div>
+          <div class="field">
+            <label for="new-feed-category">Category</label>
+            <input type="text" id="new-feed-category" class="input" value="Physics" placeholder="Physics" />
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="btn-preview-new-feed">🔍 Test / Preview URL</button>
+          <button type="submit" class="btn btn-primary">Save Feed</button>
+          <button type="button" class="btn btn-ghost" id="btn-cancel-new-feed">Cancel</button>
+        </div>
+        <div id="new-feed-preview-box" class="feed-preview-box hidden"></div>
+      </form>
+
+      <div id="feeds-expandable-list" class="expandable-list"></div>
+    </section>
+
+    <!-- TAB 4: EXPANDABLE JEV QUERIES + WEIGHTS + INTERACTIVE SINGLE-QUERY TESTER -->
+    <section id="tab-queries" class="tab-panel">
+      <div class="queries-layout">
+        <!-- Left Column: Expandable Jev Queries List & Weight Parameters -->
+        <div class="queries-column">
+          <div class="split-header">
+            <div>
+              <h2 class="section-title">Jev Queries &amp; Weights</h2>
+              <p class="section-desc">
+                Each query is either <strong>Yes/No (<code>noul</code>)</strong> or <strong>Score (<code>score</code> rubric)</strong>.
+                Outputs are normalized to <code>[0.0, 1.0]</code> and multiplied by the query's <strong>Weight</strong>.
+              </p>
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-toggle-new-query">+ Add Jev Query</button>
+          </div>
+
+          <form id="new-query-form" class="card form-card hidden">
+            <h3>Create Jev Query</h3>
+            <div class="form-grid-3">
+              <div class="field">
+                <label for="new-query-name">Query Name</label>
+                <input type="text" id="new-query-name" class="input" placeholder="e.g. Single-Cell RNA-seq" required />
+              </div>
+              <div class="field">
+                <label for="new-query-type">Query Type</label>
+                <select id="new-query-type" class="select">
+                  <option value="noul">Yes / No Probability (noul)</option>
+                  <option value="score">Ordered Rubric Scale (score)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="new-query-weight">Weight (w)</label>
+                <input type="number" id="new-query-weight" class="input" value="1.0" step="0.1" required />
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="new-query-instructions">Instructions / Question for Jev</label>
+              <textarea id="new-query-instructions" class="textarea" rows="2" placeholder="Does this paper develop or apply single-cell transcriptomics or spatial omics methods?" required></textarea>
+            </div>
+
+            <!-- Criteria for noul -->
+            <div id="new-query-noul-criteria" class="criteria-subbox">
+              <p class="criteria-hint">Optional semantic definitions for Yes (True) and No (False):</p>
+              <div class="form-grid-2">
+                <div class="field">
+                  <label for="new-query-true-desc">When True (Yes)</label>
+                  <input type="text" id="new-query-true-desc" class="input" placeholder="Paper directly uses or introduces scRNA-seq / spatial omics" />
+                </div>
+                <div class="field">
+                  <label for="new-query-false-desc">When False (No)</label>
+                  <input type="text" id="new-query-false-desc" class="input" placeholder="Unrelated topic or bulk-only sequencing" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Criteria for score -->
+            <div id="new-query-score-criteria" class="criteria-subbox hidden">
+              <div class="split-header-sm">
+                <p class="criteria-hint">Ordered Rubric Levels (from Lowest <code>[0]</code> to Highest <code>[K-1]</code>):</p>
+                <button type="button" class="btn btn-xs btn-secondary" id="btn-add-new-score-level">+ Add Level</button>
+              </div>
+              <div id="new-query-levels-list" class="levels-list"></div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Save Jev Query</button>
+              <button type="button" class="btn btn-ghost" id="btn-cancel-new-query">Cancel</button>
+            </div>
+          </form>
+
+          <div id="queries-expandable-list" class="expandable-list"></div>
+        </div>
+
+        <!-- Right Column: Interactive Single-Query Jev Tester -->
+        <aside class="tester-column">
+          <div class="card tester-card">
+            <div class="tester-header">
+              <h2>🔬 Individual Jev Query Tester</h2>
+              <p class="section-desc">
+                Pick an RSS feed, pick one of its entries, choose a Jev query, and see the live Jev decision result with one click.
+              </p>
+            </div>
+
+            <div class="field">
+              <label for="tester-feed-select">1. Pick an RSS Feed</label>
+              <div class="input-with-btn">
+                <select id="tester-feed-select" class="select"></select>
+                <button type="button" class="btn btn-secondary" id="btn-tester-load-feed">Fetch Entries</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="tester-entry-select">2. Pick an Entry from Feed</label>
+              <select id="tester-entry-select" class="select">
+                <option value="">-- Click "Fetch Entries" or select an entry --</option>
+              </select>
+            </div>
+
+            <div class="tester-entry-preview" id="tester-entry-preview">
+              <div class="field">
+                <label for="tester-entry-title">Selected Entry Title</label>
+                <input type="text" id="tester-entry-title" class="input" placeholder="Select an entry above or paste a title..." />
+              </div>
+              <div class="field">
+                <label for="tester-entry-summary">Selected Entry Abstract / Summary</label>
+                <textarea id="tester-entry-summary" class="textarea" rows="4" placeholder="Select an entry above or paste an abstract to test..."></textarea>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="tester-query-select">3. Pick a Jev Query to Test</label>
+              <select id="tester-query-select" class="select"></select>
+            </div>
+
+            <button type="button" class="btn btn-primary btn-block" id="btn-run-jev-test">
+              ▶ Run Individual Jev Query
+            </button>
+
+            <div id="tester-result-box" class="tester-result-box hidden"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- TAB 5: SETTINGS -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="settings-grid">
+        <div class="card form-card max-w-md">
+          <h2>AI Provider, Model &amp; Feed Settings</h2>
+          <form id="settings-form" aria-labelledby="settings-provider-heading">
+            <div class="field">
+              <label for="setting-ai-provider" id="settings-provider-heading">AI Provider (OpenRouter, NanoGPT, OpenCode &amp; 25+ More)</label>
+              <select id="setting-ai-provider" name="ai_provider" class="select"></select>
+              <small class="field-help" id="setting-provider-desc">
+                Supports native TypeSafe Jev decision models (/api/alpha/decisions) and 300+ chat models.
+              </small>
+            </div>
+
+            <div class="provider-portal-banner" id="setting-provider-portal-banner">
+              <div class="provider-portal-info">
+                <span class="muted-label">Provider Link / API Keys:</span>
+                <code id="setting-portal-url-display">https://openrouter.ai/keys</code>
+              </div>
+              <button type="button" class="btn btn-xs btn-secondary" id="btn-setting-open-portal">
+                🔗 Open Provider Link ↗
+              </button>
+            </div>
+
+            <div class="field">
+              <label for="setting-jev-model">Decision / Ranking Model ID</label>
+              <div class="input-with-btn">
+                <input
+                  type="text"
+                  id="setting-jev-model"
+                  name="jev_model"
+                  class="input"
+                  value="typesafe/jev-1.14"
+                  list="provider-model-datalist"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  required
+                />
+                <button type="button" class="btn btn-secondary" id="btn-fetch-provider-models" title="Query provider /models endpoint for live models">
+                  ↻ Fetch Models
+                </button>
+              </div>
+              <datalist id="provider-model-datalist"></datalist>
+              <small class="field-help" id="setting-model-help">
+                Pick a recommended model or click "Fetch Models" to load live models from the provider.
+              </small>
+            </div>
+
+            <details id="setting-custom-provider-details" class="custom-provider-details">
+              <summary class="custom-provider-summary">
+                <span>⚙️ Custom Provider URL &amp; General Provider Link (Optional Override / Own Provider)</span>
+              </summary>
+              <fieldset class="custom-provider-fieldset">
+                <legend class="visually-hidden">Custom Provider Endpoint and General Link</legend>
+                <div class="field">
+                  <label for="setting-custom-provider-name">Your Provider Name</label>
+                  <input
+                    type="text"
+                    id="setting-custom-provider-name"
+                    name="custom_provider_name"
+                    class="input"
+                    placeholder="e.g. My NanoGPT / LiteLLM / Local vLLM"
+                  />
+                </div>
+                <div class="field">
+                  <label for="setting-custom-base-url">API Base URL (OpenAI-Compatible <code>/v1</code>)</label>
+                  <input
+                    type="url"
+                    id="setting-custom-base-url"
+                    name="custom_base_url"
+                    class="input"
+                    placeholder="https://your-provider.example.com/v1"
+                    autocorrect="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                  />
+                  <small class="field-help">
+                    Leave blank to use the selected built-in provider's default endpoint, or set a custom URL for your own provider.
+                  </small>
+                </div>
+                <div class="field">
+                  <label for="setting-custom-portal-url">General Link for Your Provider (Dashboard / Keys / Docs URL)</label>
+                  <div class="input-with-btn">
+                    <input
+                      type="url"
+                      id="setting-custom-portal-url"
+                      name="custom_portal_url"
+                      class="input"
+                      placeholder="https://your-provider.example.com/keys"
+                      autocorrect="off"
+                      autocapitalize="none"
+                      spellcheck="false"
+                    />
+                    <button type="button" class="btn btn-secondary" id="btn-open-custom-portal-url" title="Open your custom provider link in the browser">
+                      ↗ Open Link
+                    </button>
+                  </div>
+                </div>
+              </fieldset>
+            </details>
+
+            <div class="field">
+              <label for="setting-max-entries">Max Entries Fetched per RSS Feed</label>
+              <input type="number" id="setting-max-entries" name="max_entries_per_feed" class="input" value="25" min="1" max="200" />
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Save Provider &amp; Settings</button>
+              <button type="button" class="btn btn-secondary" id="btn-settings-manage-key">🔑 Set / Unlock API Key</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card form-card max-w-md">
+          <h2>Data &amp; AI Skills Folder</h2>
+          <p class="section-desc" style="margin-bottom: 0.85rem;">
+            Configure the folder where SmartRSSReader stores <code>smart_rss.db</code>, <code>secrets.enc</code>, and provisions the local AI skills (<code>.agents/skills/</code>, <code>AGENTS.md</code>, and <code>./smart-rss</code>).
+          </p>
+          <form id="settings-folder-form">
+            <div class="field">
+              <label for="setting-data-dir">Active Data &amp; AI Skills Folder Path</label>
+              <input type="text" id="setting-data-dir" name="data_dir" class="input" autocorrect="off" autocapitalize="none" spellcheck="false" required />
+              <small class="field-help">
+                Open your AI coding agent inside this folder to manage feeds, Jev queries, and providers without global skills.
+              </small>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Update Folder &amp; Provision Skills</button>
+              <button type="button" class="btn btn-secondary" id="btn-settings-open-folder">📂 Open Folder</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- PASSWORD / API KEY ENCRYPTION DIALOG -->
+  <dialog id="auth-dialog" class="modal-dialog" closedby="any" aria-labelledby="auth-modal-title">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="auth-modal-title">AI Provider &amp; API Key Encryption</h2>
+        <button type="button" class="btn-close" id="btn-close-auth" aria-label="Close">✕</button>
+      </div>
+
+      <!-- Mode A: Unlock existing encrypted key -->
+      <form id="auth-unlock-form" class="hidden">
+        <p class="modal-desc">
+          Your AI provider API keys are encrypted on disk (<code>AES-256-GCM</code> + <code>PBKDF2</code>).
+          Enter your password to unlock them into memory for this session.
+        </p>
+        <div class="field">
+          <label for="unlock-password-input">Encryption Password</label>
+          <div class="password-input-wrap">
+            <input type="password" id="unlock-password-input" name="password" class="input" placeholder="Enter your password..." autocomplete="current-password" aria-invalid="false" required autofocus />
+            <button type="button" class="btn-password-peek" data-peek-target="unlock-password-input" aria-pressed="false" aria-label="Show password briefly" title="Show password briefly (1.5s)">
+              <svg class="icon-eye" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="icon-eye-off" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+                <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+                <line x1="2" y1="2" x2="22" y2="22"/>
+              </svg>
+            </button>
+          </div>
+          <div id="unlock-password-error" class="auth-error-banner hidden" role="alert">
+            <span class="auth-error-icon" aria-hidden="true">⚠</span>
+            <div class="auth-error-body">
+              <strong id="unlock-password-error-text">Incorrect password.</strong>
+              <span class="auth-error-hint">
+                Forgot your password? Click <strong>Add / Change Provider Key</strong> below to re-enter your API key with a new password.
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary">🔓 Unlock API Keys</button>
+          <button type="button" class="btn btn-ghost" id="btn-switch-to-setup">Add / Change Provider Key</button>
+        </div>
+      </form>
+
+      <!-- Mode B: Setup / Encrypt new key -->
+      <form id="auth-setup-form" class="hidden">
+        <p class="modal-desc">
+          Select an AI provider (OpenRouter, NanoGPT, OpenCode, OpenAI, Anthropic, Gemini, or your own Custom Provider), enter your API key, and encrypt it locally.
+        </p>
+        <div id="setup-auth-error" class="auth-error-banner hidden" role="alert">
+          <span class="auth-error-icon" aria-hidden="true">⚠</span>
+          <div class="auth-error-body">
+            <strong id="setup-auth-error-text"></strong>
+          </div>
+        </div>
+        <div class="field">
+          <label for="setup-provider-select">AI Provider</label>
+          <div class="input-with-btn">
+            <select id="setup-provider-select" name="provider_id" class="select"></select>
+            <button type="button" class="btn btn-secondary" id="btn-auth-open-portal" title="Open provider API key page or custom provider link">
+              🔗 Get Key / Link ↗
+            </button>
+          </div>
+        </div>
+        <div id="setup-custom-provider-box" class="criteria-subbox hidden">
+          <div class="field">
+            <label for="setup-custom-name">Your Provider Name</label>
+            <input type="text" id="setup-custom-name" class="input" placeholder="e.g. My Custom Provider" />
+          </div>
+          <div class="field">
+            <label for="setup-custom-base-url">API Base URL (<code>/v1</code>)</label>
+            <input type="url" id="setup-custom-base-url" class="input" placeholder="https://your-provider.example.com/v1" autocorrect="off" autocapitalize="none" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="setup-custom-portal-url">General Link for Your Provider</label>
+            <input type="url" id="setup-custom-portal-url" class="input" placeholder="https://your-provider.example.com/keys" autocorrect="off" autocapitalize="none" spellcheck="false" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="setup-apikey-input">Provider API Key</label>
+          <input type="password" id="setup-apikey-input" name="api_key" class="input" placeholder="Paste API key for selected provider..." autocomplete="off" required />
+        </div>
+        <div class="field">
+          <label for="setup-password-input">Session Encryption Password</label>
+          <div class="password-input-wrap">
+            <input type="password" id="setup-password-input" name="password" class="input" placeholder="Choose a password..." autocomplete="new-password" required />
+            <button type="button" class="btn-password-peek" data-peek-target="setup-password-input" aria-pressed="false" aria-label="Show password briefly" title="Show password briefly (1.5s)">
+              <svg class="icon-eye" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="icon-eye-off" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+                <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+                <line x1="2" y1="2" x2="22" y2="22"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary">🔐 Encrypt &amp; Save API Key</button>
+          <button type="button" class="btn btn-ghost hidden" id="btn-back-to-unlock">Back to Unlock</button>
+        </div>
+      </form>
+
+      <!-- Mode C: Currently Unlocked Status -->
+      <div id="auth-unlocked-panel" class="hidden">
+        <p class="modal-desc">
+          Active provider: <strong id="unlocked-provider-name">OpenRouter</strong> — API key <strong id="unlocked-masked-key"></strong> is unlocked in application RAM.
+        </p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-lock-session">🔒 Lock Now (Clear RAM)</button>
+          <button type="button" class="btn btn-outline" id="btn-replace-key">Add / Change Provider Key</button>
+          <button type="button" class="btn btn-ghost" id="btn-unlocked-open-portal">🔗 Provider Portal ↗</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

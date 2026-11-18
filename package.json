@@ -1,0 +1,14 @@
+{
+  "name": "smart-rss-reader-tauri",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-platform Tauri v2 Scientific RSS Reader & OpenRouter TypeSafe Jev Relevance Ranker",
+  "scripts": {
+    "tauri": "cargo tauri",
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}
