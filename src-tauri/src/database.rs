@@ -220,21 +220,27 @@ impl Database {
         if feed_count == 0 {
             let starter_feeds = [
                 (
-                    "Nature - Current Issue",
+                    "Nature",
                     "https://www.nature.com/nature.rss",
                     "Multidisciplinary",
                     1i64,
                 ),
                 (
-                    "Science - Current Issue",
-                    "https://www.science.org/rss/news_current.xml",
+                    "Science",
+                    "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
                     "Multidisciplinary",
                     1i64,
                 ),
                 (
-                    "arXiv - Quantitative Biology",
-                    "https://rss.arxiv.org/rss/q-bio",
-                    "Preprints",
+                    "Nature Communications",
+                    "https://www.nature.com/ncomms.rss",
+                    "Multidisciplinary",
+                    1i64,
+                ),
+                (
+                    "Science Advances",
+                    "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv",
+                    "Multidisciplinary",
                     1i64,
                 ),
             ];
@@ -255,26 +261,13 @@ impl Database {
         if query_count == 0 {
             let starter_queries = [
                 (
-                    "Original Research Article",
+                    "Neuroscience Paper",
                     "noul",
-                    "Is this entry presenting original scientific research or a novel method (rather than an editorial, correction, erratum, or news brief)?",
+                    "Is the topic of this paper any one of the following: neuroscience, systems neuroscience, computational neuroscience, or network dynamics with neuroscience applications?",
                     json!({
-                        "true": "Presents original scientific results, experiments, theory, or computational methods.",
-                        "false": "Author correction, erratum, editorial, commentary, book review, or news snippet."
+                        "true": "The paper investigates neuroscience, systems neuroscience, computational neuroscience, or neural network dynamics with neuroscience applications.",
+                        "false": "The paper is outside neuroscience and has no direct neuroscience application."
                     })
-                    .to_string(),
-                    1.5f64,
-                    1i64,
-                ),
-                (
-                    "Computational / AI Methodology Depth",
-                    "score",
-                    "Rate the depth of computational modeling, machine learning, or quantitative data analysis in this paper.",
-                    json!([
-                        "No computational, statistical, or modeling focus mentioned",
-                        "Uses standard statistical or bioinformatics tools as a minor component",
-                        "Develops or heavily applies advanced computational models, algorithms, or AI"
-                    ])
                     .to_string(),
                     2.0f64,
                     1i64,

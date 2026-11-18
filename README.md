@@ -1,14 +1,48 @@
-# SmartRSSReader (Multi-Platform Tauri v2 Desktop App)
+# SmartRSSReader
+
+[![Download Latest Release](https://img.shields.io/github/v/release/dylanfesta/RSS-Sci-Jev-Reader?include_prereleases&label=Download%20Desktop%20App&style=for-the-badge&logo=github&color=2ea44f)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest)
 
 [![License: CC0-1.0](https://img.shields.io/badge/License-CC0_1.0-lightgrey.svg)](http://creativecommons.org/publicdomain/zero/1.0/)
-[![Status: Experimental Alpha](https://img.shields.io/badge/status-alpha%20%2F%20untested-orange.svg)](#)
+[![Status: Experimental Alpha](https://img.shields.io/badge/status-alpha%20%2F%20untested-orange.svg)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](#download-pre-built-desktop-app)
+
+**SmartRSSReader** is a local desktop app that turns noisy scientific feeds into a personalized, ranked reading list in two simple steps:
+
+1. **Select the RSS feeds** of all the scientific journals and preprint servers you follow (e.g., *Nature*, *Science*, *Neuron*, *arXiv*, *bioRxiv*).
+2. **Define an arbitrary number of selection criteria**—both positive boosts (topics or methods you care about) and negative penalties (topics or methods you want to filter out)—to give every new paper a combined relevance score.
+
+### Why is it so fast and cheap? (What is TypeSafe Jev?)
+
+Instead of asking a slow, chatty Large Language Model to write essays or JSON about every paper, SmartRSSReader uses **[TypeSafe Jev](https://openrouter.ai/typesafe)** (via OpenRouter)—a specialized decision model built strictly for structured evaluation rather than text generation.
+
+Given a paper's title and abstract alongside your custom criteria, Jev skips prose generation entirely and directly outputs calibrated probabilities (for Yes/No questions or multi-level rubrics) in a single pass. Because it doesn't waste tokens "talking," scoring hundreds of newly published papers against multiple criteria is **extremely fast and costs fractions of a cent**—plus SmartRSSReader remembers every paper it has already seen, so you never pay to score the same paper twice, and changing criterion weights re-ranks your entire feed instantly offline.
 
 > [!WARNING]
-> **Experimental Alpha Software — Untested & Provided As-Is**
+> **Experimental Alpha Software & API Spending Limits**
 >
-> This software is in an **early alpha** stage of development. It is largely **untested** across diverse environments, operating systems, and edge cases. Expect rough edges, breaking changes, potential bugs, or incomplete behavior. Use at your own risk!
+> - **API Key Safety:** In my testing, running all queries combined across my feeds did not cost more than **~5 cents**. However, because this software is **not thoroughly tested** (a bug or misconfigured feed could theoretically trigger unexpected requests), I strongly recommend **always using API keys that have a maximum spending limit** (for example, setting a small USD credit cap on your OpenRouter key).
+> - **Early Alpha Status:** Expect rough edges, breaking changes, or incomplete behavior across diverse environments and operating systems. Provided strictly as-is—use at your own risk!
 
-A self-contained, multi-platform scientific journal RSS reader and relevance-ranker built with **Tauri v2 (Rust + Webview)**, powered by **OpenRouter's TypeSafe Jev** decision model.
+## Download Pre-Built Desktop App
+
+No Rust or Node.js setup required—grab the pre-built installer for your operating system directly below, or browse [**All Releases & Changelogs →**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest).
+
+| Operating System | Primary Installer (1-Click Download) | Alternative Formats |
+| :--- | :--- | :--- |
+| **Windows** (x64) | [**⬇ Download `.exe` Setup**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Windows_x64-setup.exe) | [`.msi` Installer](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Windows_x64.msi) |
+| **macOS** (Apple Silicon M1–M4) | [**⬇ Download `.dmg` (Apple Silicon)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_macOS_AppleSilicon.dmg) | [`.app.tar.gz`](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest) |
+| **macOS** (Intel) | [**⬇ Download `.dmg` (Intel x64)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_macOS_Intel.dmg) | [`.app.tar.gz`](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest) |
+| **Linux** (x86_64) | [**⬇ Download `.deb` (Ubuntu / Debian)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_amd64.deb) | [`.AppImage` (Universal)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_amd64.AppImage) · [`.rpm` (Fedora / RHEL)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_x86_64.rpm) |
+
+<details>
+<summary><strong>First-launch notes (macOS Gatekeeper / Windows SmartScreen / Linux AppImage)</strong></summary>
+
+Because these alpha binaries are not code-signed with paid Apple/Microsoft developer certificates yet:
+- **macOS**: After dragging `SmartRSSReader.app` to `Applications`, right-click (Control-click) the app and choose **Open** (or run `xattr -cr /Applications/SmartRSSReader.app` if macOS reports it is "damaged" or from an unidentified developer).
+- **Windows**: If Windows Defender SmartScreen appears, click **More info** → **Run anyway**.
+- **Linux `.AppImage`**: Make the file executable before launching (`chmod +x SmartRSSReader_Linux_amd64.AppImage && ./SmartRSSReader_Linux_amd64.AppImage`).
+
+</details>
 
 ## Key Features
 

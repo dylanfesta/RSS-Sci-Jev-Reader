@@ -83,5 +83,38 @@ jobs:
 
             See the attached assets below to download installers/binaries for Linux, macOS (Apple Silicon & Intel), and Windows.
           releaseDraft: false
-          prerelease: true
+          prerelease: false
           args: ${{ matrix.args }}
+
+  upload-stable-aliases:
+    needs: publish-tauri
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Upload versionless asset aliases for evergreen README download links
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p dist-aliases
+          gh release download "$TAG_NAME" --repo "$REPO" --dir dist-aliases
+
+          cd dist-aliases
+          for src in *.exe; do [ -f "$src" ] && cp "$src" SmartRSSReader_Windows_x64-setup.exe; done
+          for src in *.msi; do [ -f "$src" ] && cp "$src" SmartRSSReader_Windows_x64.msi; done
+          for src in *_aarch64.dmg; do [ -f "$src" ] && cp "$src" SmartRSSReader_macOS_AppleSilicon.dmg; done
+          for src in *_x64.dmg; do [ -f "$src" ] && cp "$src" SmartRSSReader_macOS_Intel.dmg; done
+          for src in *.AppImage; do [ -f "$src" ] && cp "$src" SmartRSSReader_Linux_amd64.AppImage; done
+          for src in *.deb; do [ -f "$src" ] && cp "$src" SmartRSSReader_Linux_amd64.deb; done
+          for src in *.rpm; do [ -f "$src" ] && cp "$src" SmartRSSReader_Linux_x86_64.rpm; done
+
+          gh release upload "$TAG_NAME" --repo "$REPO" --clobber \
+            SmartRSSReader_Windows_x64-setup.exe \
+            SmartRSSReader_Windows_x64.msi \
+            SmartRSSReader_macOS_AppleSilicon.dmg \
+            SmartRSSReader_macOS_Intel.dmg \
+            SmartRSSReader_Linux_amd64.AppImage \
+            SmartRSSReader_Linux_amd64.deb \
+            SmartRSSReader_Linux_x86_64.rpm

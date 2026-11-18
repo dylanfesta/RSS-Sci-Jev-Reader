@@ -2067,7 +2067,7 @@ mod tests {
             .await
             .unwrap();
         let feeds_arr = r_feeds["feeds"].as_array().unwrap();
-        assert_eq!(feeds_arr.len(), 3);
+        assert_eq!(feeds_arr.len(), 4);
         for f in feeds_arr {
             assert_eq!(f["enabled"], true);
         }
@@ -2076,7 +2076,7 @@ mod tests {
         let rss_file = base_path.join("sample_feed.xml");
         std::fs::write(&rss_file, SAMPLE_RSS_XML).unwrap();
 
-        // Disable the 3 internet feeds and add our local enabled feed (both bool `true` and int `1` supported)
+        // Disable the 4 internet feeds and add our local enabled feed (both bool `true` and int `1` supported)
         for f in feeds_arr {
             let fid = f["id"].as_i64().unwrap();
             dispatch_api_request(
