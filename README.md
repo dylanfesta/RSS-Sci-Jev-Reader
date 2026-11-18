@@ -8,30 +8,51 @@
 >
 > This software is in an **early alpha** stage of development. It is largely **untested** across diverse environments, operating systems, and edge cases. Expect rough edges, breaking changes, potential bugs, or incomplete behavior. Use at your own risk!
 
-A self-contained, multi-platform (**Linux, macOS, Windows**) scientific journal RSS reader and relevance ranker built with **Tauri v2 (Rust + Webview)**, powered by **OpenRouter's TypeSafe Jev** decision model (`typesafe/jev-1.14` via `POST https://openrouter.ai/api/alpha/decisions`).
-
-Fully equivalent in every aspect to the reference `SmartRSSReader` implementation—including dark/light mode, SQLite WAL persistence, 30-day archive memory, historical query snapshots, and AES-256-GCM API key encryption—while providing a **self-contained Data & AI Skills Folder** (`~/SmartRSSReader` by default) so AI agents can interact with your feeds and Jev queries without installing system-wide skills.
+A self-contained, multi-platform scientific journal RSS reader and relevance-ranker built with **Tauri v2 (Rust + Webview)**, powered by **OpenRouter's TypeSafe Jev** decision model.
 
 ## Key Features
 
-- **Self-Contained Data & AI Skills Folder (`~/SmartRSSReader`)**:
-  - Automatically provisions `smart_rss.db` (SQLite WAL), `secrets.enc` (encrypted API key), `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `.agents/skills/manage-rss-feeds/SKILL.md`, `.agents/skills/manage-jev-queries/SKILL.md`, and local `./smart-rss` (`smart-rss.cmd` on Windows) CLI wrappers inside the same folder that stores your data.
-  - Open any AI coding assistant (Antigravity, Claude Code, Cursor, Codex, Gemini CLI) inside your Data Folder and ask it in natural language to add feeds, test journals, or tune Jev queries—zero system-wide skill installation required.
-  - Includes a live SQLite WAL file watcher that automatically refreshes the open Tauri app window whenever an AI agent updates feeds or query weights.
-- **Expandable "🤖 AI Skills & Info" Frame**:
-  - Appears automatically on first launch (and can be expanded/collapsed anytime from the header bar) to show your Data & AI Skills Folder path, one-click folder actions (**Copy Path**, **Open Folder**, **Change Folder**, **Re-sync Skills**), copyable AI prompts, and an overview of the Jev ranking engine.
-- **29+ AI Providers (OpenCode Catalog + NanoGPT + Local + Custom Provider Link)**:
-  - Native **OpenRouter TypeSafe Jev** (`/api/alpha/decisions`) plus structured JSON probability evaluation across **NanoGPT** (`https://nano-gpt.com/api/v1`), **OpenCode Zen** (`https://opencode.ai/zen/v1`), **OpenAI**, **Anthropic**, **Google Gemini**, **DeepSeek**, **xAI Grok**, **Mistral**, **Groq**, **Cerebras**, **Together AI**, **Fireworks AI**, **Venice AI**, **Chutes AI**, **SiliconFlow**, **Z.ai / GLM**, **Perplexity**, **DeepInfra**, **Hyperbolic**, **Featherless AI**, **SambaNova**, **Nebius**, **NVIDIA NIM**, **GitHub Models**, **Novita AI**, **Ollama** (local), **LM Studio** (local), and **Custom / Own Provider** (with configurable **API Base URL** and **General Link for Your Provider** to open your dashboard, API keys, or docs in one click).
-- **Password-Encrypted Multi-Provider API Keys (`AES-256-GCM` + `PBKDF2-HMAC-SHA256`)**:
-  - Encrypted at rest in `secrets.enc` (600,000 PBKDF2 iterations, binary-compatible with the Python version) and unlocked into RAM with your password when using the app, storing separate keys per provider under your master password, plus cross-platform OS Keyring support (Linux GNOME Keyring / `libsecret`, macOS Keychain, Windows Credential Manager).
-- **Incremental Memory (New Entries Only) & 1-Month Archive Retention**:
-  - Remembers all seen RSS entries in `smart_rss.db` across both the **Ranked Feed** and the **Archive**, ensuring feed updates only run Jev queries on genuinely new papers. Automatically prunes archived entries older than 30 days on startup.
 - **Expandable RSS Feeds List + Live Test/Preview**:
   - Inspect, edit, enable/disable, and live-preview entries from any scientific journal RSS/Atom/RDF feed.
-- **Expandable Jev Queries (`noul` Yes/No & `score` Rubric) + Positive/Negative Weights**:
+- **Expandable Jev Queries (Yes/No & `score`) + Positive/Negative Weights**:
   - Configure binary (`noul`) and multi-level rubric (`score`) queries with positive boosts or negative penalties. Outputs are normalized to `[0.0, 1.0]`, and changing weights immediately recalculates paper rankings offline.
 - **Interactive Individual Jev Query Tester**:
   - Pick an RSS feed, pick an entry from that feed, choose a Jev query, and inspect the live Jev probability distribution and weighted score with one click.
+- **29+ AI Providers (OpenCode Catalog + NanoGPT + Local + Custom Provider Link)**:
+  - Tested exclusively on **OpenRouter, TypeSafe Jev** (`/api/alpha/decisions`) plus structured JSON probability evaluation.
+  - Further providers included but untested.
+- **Password-Encrypted Multi-Provider API Keys (`AES-256-GCM` + `PBKDF2-HMAC-SHA256`)**:
+  - Encrypted at rest in `secrets.enc` (600,000 PBKDF2 iterations, binary-compatible with the Python version) and unlocked into RAM with your password when using the app, storing separate keys per provider under your master password.
+- **Incremental Memory (New Entries Only) & 1-Month Archive Retention**:
+  - Remembers all seen RSS entries in `smart_rss.db` across both the **Ranked Feed** and the **Archive**, ensuring feed updates only run Jev queries on genuinely new papers. Automatically prunes archived entries older than 30 days on startup.
+
+## Where Your Database Lives & Using Natural Language with AI
+
+On first launch, SmartRSSReader automatically creates a single **Data & AI Skills Folder** named `SmartRSSReader` inside your home directory (unless you choose a custom location via **🤖 AI Skills & Info → Change Folder...**).
+
+Assuming your username is **Jane Doe** (`janedoe`), your SQLite database (`smart_rss.db`) and encrypted API keys (`secrets.enc`) are created by default at:
+
+| Platform | Default Folder | Database File |
+| :--- | :--- | :--- |
+| **Linux** | `/home/janedoe/SmartRSSReader` | `/home/janedoe/SmartRSSReader/smart_rss.db` |
+| **macOS** | `/Users/janedoe/SmartRSSReader` | `/Users/janedoe/SmartRSSReader/smart_rss.db` |
+| **Windows** | `C:\Users\janedoe\SmartRSSReader` | `C:\Users\janedoe\SmartRSSReader\smart_rss.db` |
+
+### Manage Feeds & Queries in Natural Language
+
+The exact folder path currently in use is always shown at the top of the app inside the **🤖 AI Skills & Info** panel (with **Copy Path** and **Open Folder** buttons).
+
+Alongside `smart_rss.db`, the app automatically places ready-to-use AI instructions (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `.agents/skills/`) and a local CLI wrapper (`./smart-rss` or `smart-rss.cmd`) directly into that same folder.
+
+To manage your reader with natural language—with zero extra setup:
+1. Check the folder path shown in **🤖 AI Skills & Info** (or click **Copy Path**).
+2. Open any AI coding assistant (**Antigravity**, **Claude Code**, **Gemini CLI**, **Cursor**, **Codex**, etc.) in that folder.
+3. Ask in plain English—for example:
+   - *"Add the Nature Neuroscience and Neuron RSS feeds, and test them first."*
+   - *"Penalize papers that primarily rely on fMRI or EEG."*
+   - *"Boost papers with strong computational modeling."*
+
+Any changes your AI assistant makes to `smart_rss.db` show up **live** in the open SmartRSSReader window.
 
 ## Quick Start (Development & Build)
 
