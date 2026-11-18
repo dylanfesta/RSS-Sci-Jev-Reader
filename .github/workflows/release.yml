@@ -92,7 +92,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Upload versionless asset aliases for evergreen README download links
+      - name: Rename release assets to clean, evergreen OS filenames
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
@@ -102,13 +102,18 @@ jobs:
           gh release download "$TAG_NAME" --repo "$REPO" --dir dist-aliases
 
           cd dist-aliases
-          for src in *.exe; do [ -f "$src" ] && cp "$src" SmartRSSReader_Windows_x64-setup.exe; done
-          for src in *.msi; do [ -f "$src" ] && cp "$src" SmartRSSReader_Windows_x64.msi; done
-          for src in *_aarch64.dmg; do [ -f "$src" ] && cp "$src" SmartRSSReader_macOS_AppleSilicon.dmg; done
-          for src in *_x64.dmg; do [ -f "$src" ] && cp "$src" SmartRSSReader_macOS_Intel.dmg; done
-          for src in *.AppImage; do [ -f "$src" ] && cp "$src" SmartRSSReader_Linux_amd64.AppImage; done
-          for src in *.deb; do [ -f "$src" ] && cp "$src" SmartRSSReader_Linux_amd64.deb; done
-          for src in *.rpm; do [ -f "$src" ] && cp "$src" SmartRSSReader_Linux_x86_64.rpm; done
+          OLD_ASSETS=()
+          for f in *; do
+            [ -f "$f" ] && OLD_ASSETS+=("$f")
+          done
+
+          for src in *.exe; do [ -f "$src" ] && mv "$src" SmartRSSReader_Windows_x64-setup.exe; done
+          for src in *.msi; do [ -f "$src" ] && mv "$src" SmartRSSReader_Windows_x64.msi; done
+          for src in *_aarch64.dmg; do [ -f "$src" ] && mv "$src" SmartRSSReader_macOS_AppleSilicon.dmg; done
+          for src in *_x64.dmg; do [ -f "$src" ] && mv "$src" SmartRSSReader_macOS_Intel.dmg; done
+          for src in *.AppImage; do [ -f "$src" ] && mv "$src" SmartRSSReader_Linux_amd64.AppImage; done
+          for src in *.deb; do [ -f "$src" ] && mv "$src" SmartRSSReader_Linux_amd64.deb; done
+          for src in *.rpm; do [ -f "$src" ] && mv "$src" SmartRSSReader_Linux_x86_64.rpm; done
 
           gh release upload "$TAG_NAME" --repo "$REPO" --clobber \
             SmartRSSReader_Windows_x64-setup.exe \
@@ -118,3 +123,7 @@ jobs:
             SmartRSSReader_Linux_amd64.AppImage \
             SmartRSSReader_Linux_amd64.deb \
             SmartRSSReader_Linux_x86_64.rpm
+
+          for old in "${OLD_ASSETS[@]}"; do
+            gh release delete-asset "$TAG_NAME" "$old" --repo "$REPO" --yes || true
+          done

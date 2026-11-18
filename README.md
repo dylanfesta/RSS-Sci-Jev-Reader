@@ -30,8 +30,8 @@ No Rust or Node.js setup required—grab the pre-built installer for your operat
 | Operating System | Primary Installer (1-Click Download) | Alternative Formats |
 | :--- | :--- | :--- |
 | **Windows** (x64) | [**⬇ Download `.exe` Setup**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Windows_x64-setup.exe) | [`.msi` Installer](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Windows_x64.msi) |
-| **macOS** (Apple Silicon M1–M4) | [**⬇ Download `.dmg` (Apple Silicon)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_macOS_AppleSilicon.dmg) | [`.app.tar.gz`](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest) |
-| **macOS** (Intel) | [**⬇ Download `.dmg` (Intel x64)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_macOS_Intel.dmg) | [`.app.tar.gz`](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest) |
+| **macOS** (Apple Silicon M1–M4) | [**⬇ Download `.dmg` (Apple Silicon)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_macOS_AppleSilicon.dmg) | — |
+| **macOS** (Intel) | [**⬇ Download `.dmg` (Intel x64)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_macOS_Intel.dmg) | — |
 | **Linux** (x86_64) | [**⬇ Download `.deb` (Ubuntu / Debian)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_amd64.deb) | [`.AppImage` (Universal)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_amd64.AppImage) · [`.rpm` (Fedora / RHEL)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_x86_64.rpm) |
 
 <details>
