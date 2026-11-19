@@ -125,8 +125,9 @@
 
             <ul class="provisioned-files-list" id="provisioned-files-list">
               <li><code>smart_rss.db</code> &amp; <code>secrets.enc</code> — Local SQLite WAL &amp; AES-256-GCM key</li>
-              <li><code>.agents/skills/manage-rss-feeds/SKILL.md</code> — Feed discovery &amp; management skill</li>
+              <li><code>.agents/skills/manage-rss-feeds/SKILL.md</code> — Feed discovery, tags &amp; management skill</li>
               <li><code>.agents/skills/manage-jev-queries/SKILL.md</code> — Jev query &amp; weight tuning skill</li>
+              <li><code>.agents/skills/import-export-config/SKILL.md</code> — TOML export &amp; import with conflict handling</li>
               <li><code>./smart-rss</code> &amp; <code>AGENTS.md</code> — Local Agent CLI &amp; documentation</li>
             </ul>
           </div>
@@ -172,13 +173,27 @@
 
               <div class="copy-prompt-item">
                 <div class="copy-prompt-text">
-                  <span class="muted-label">Or run the local CLI directly in that folder:</span>
-                  <code>./smart-rss feeds list &amp;&amp; ./smart-rss queries list</code>
+                  <span class="muted-label">Export or import feeds &amp; rules as TOML:</span>
+                  <code>"Export my RSS feeds (with tags) and filter rules to ./my_reader_config.toml."</code>
                 </div>
                 <button
                   type="button"
                   class="btn btn-xs btn-secondary btn-copy-snippet"
-                  data-copy="./smart-rss feeds list && ./smart-rss queries list"
+                  data-copy="Export my RSS feeds (with tags) and filter rules to ./my_reader_config.toml."
+                >
+                  Copy
+                </button>
+              </div>
+
+              <div class="copy-prompt-item">
+                <div class="copy-prompt-text">
+                  <span class="muted-label">Or run the local CLI directly in that folder:</span>
+                  <code>./smart-rss config export --file ./feeds_and_rules.toml</code>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-secondary btn-copy-snippet"
+                  data-copy="./smart-rss config export --file ./feeds_and_rules.toml"
                 >
                   Copy
                 </button>
@@ -373,26 +388,32 @@
         <div>
           <h2 class="section-title">Scientific Journal RSS Feeds</h2>
           <p class="section-desc">
-            Click any feed row to expand its settings, edit its URL, or run a live <strong>Test / Preview</strong> of its entries.
+            Click any feed row to expand its settings, edit its URL, category, or tags, or run a live <strong>Test / Preview</strong> of its entries.
           </p>
         </div>
-        <button type="button" class="btn btn-primary" id="btn-toggle-new-feed">+ Add RSS Feed</button>
+        <div class="header-action-group">
+          <button type="button" class="btn btn-primary" id="btn-toggle-new-feed">+ Add RSS Feed</button>
+        </div>
       </div>
 
-      <form id="new-feed-form" class="card form-card hidden">
-        <h3>Add New RSS / Atom Feed</h3>
-        <div class="form-grid-3">
+      <form id="new-feed-form" class="card form-card hidden" aria-labelledby="new-feed-form-title">
+        <h3 id="new-feed-form-title">Add New RSS / Atom Feed</h3>
+        <div class="form-grid-4">
           <div class="field">
             <label for="new-feed-title">Journal / Feed Title</label>
-            <input type="text" id="new-feed-title" class="input" placeholder="e.g. Physical Review Letters" required />
+            <input type="text" id="new-feed-title" name="title" class="input" placeholder="e.g. Physical Review Letters" required />
           </div>
           <div class="field">
             <label for="new-feed-url">RSS / Atom Feed URL</label>
-            <input type="url" id="new-feed-url" class="input" placeholder="https://feeds.aps.org/rss/recent/prl.xml" required />
+            <input type="url" id="new-feed-url" name="url" class="input" placeholder="https://feeds.aps.org/rss/recent/prl.xml" autocorrect="off" autocapitalize="none" spellcheck="false" required />
           </div>
           <div class="field">
             <label for="new-feed-category">Category</label>
-            <input type="text" id="new-feed-category" class="input" value="Physics" placeholder="Physics" />
+            <input type="text" id="new-feed-category" name="category" class="input" value="General" placeholder="e.g. Neuroscience" />
+          </div>
+          <div class="field">
+            <label for="new-feed-tags">Tags (comma-separated)</label>
+            <input type="text" id="new-feed-tags" name="tags" class="input" placeholder="e.g. preprint, computational" autocorrect="off" autocapitalize="none" spellcheck="false" />
           </div>
         </div>
         <div class="form-actions">
@@ -419,7 +440,9 @@
                 Outputs are normalized to <code>[0.0, 1.0]</code> and multiplied by the query's <strong>Weight</strong>.
               </p>
             </div>
-            <button type="button" class="btn btn-primary" id="btn-toggle-new-query">+ Add Jev Query</button>
+            <div class="header-action-group">
+              <button type="button" class="btn btn-primary" id="btn-toggle-new-query">+ Add Jev Query</button>
+            </div>
           </div>
 
           <form id="new-query-form" class="card form-card hidden">
@@ -535,28 +558,38 @@
     <section id="tab-settings" class="tab-panel">
       <div class="settings-grid">
         <div class="card form-card max-w-md">
-          <h2>AI Provider, Model &amp; Feed Settings</h2>
+          <h2 id="settings-provider-heading">Decision Provider, API URL &amp; Model Settings</h2>
           <form id="settings-form" aria-labelledby="settings-provider-heading">
             <div class="field">
-              <label for="setting-ai-provider" id="settings-provider-heading">AI Provider (OpenRouter, NanoGPT, OpenCode &amp; 25+ More)</label>
-              <select id="setting-ai-provider" name="ai_provider" class="select"></select>
+              <label for="setting-ai-provider">Decision Provider Preset (Jev, Clef, Decider &amp; Luna)</label>
+              <select id="setting-ai-provider" name="ai_provider" class="select" aria-describedby="setting-provider-desc"></select>
               <small class="field-help" id="setting-provider-desc">
-                Supports native TypeSafe Jev decision models (/api/alpha/decisions) and 300+ chat models.
+                All listed providers natively execute structured System One / Decision models (zero chat-prose workarounds).
               </small>
             </div>
 
-            <div class="provider-portal-banner" id="setting-provider-portal-banner">
-              <div class="provider-portal-info">
-                <span class="muted-label">Provider Link / API Keys:</span>
-                <code id="setting-portal-url-display">https://openrouter.ai/keys</code>
-              </div>
-              <button type="button" class="btn btn-xs btn-secondary" id="btn-setting-open-portal">
-                🔗 Open Provider Link ↗
-              </button>
+            <div class="field">
+              <label for="setting-provider-api-url">Provider Decisions API URL</label>
+              <input
+                type="url"
+                id="setting-provider-api-url"
+                name="provider_api_url"
+                class="input"
+                value="https://openrouter.ai/api/alpha/decisions"
+                placeholder="https://openrouter.ai/api/alpha/decisions"
+                aria-describedby="setting-api-url-help"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+                required
+              />
+              <small class="field-help" id="setting-api-url-help">
+                Exact HTTP endpoint called for structured probability evaluation (you can customize this freely).
+              </small>
             </div>
 
             <div class="field">
-              <label for="setting-jev-model">Decision / Ranking Model ID</label>
+              <label for="setting-jev-model">Decision / Jev Model Name</label>
               <div class="input-with-btn">
                 <input
                   type="text"
@@ -564,74 +597,84 @@
                   name="jev_model"
                   class="input"
                   value="typesafe/jev-1.14"
+                  placeholder="typesafe/jev-1.14"
                   list="provider-model-datalist"
+                  aria-describedby="setting-model-help"
                   autocorrect="off"
                   autocapitalize="none"
                   spellcheck="false"
                   required
                 />
-                <button type="button" class="btn btn-secondary" id="btn-fetch-provider-models" title="Query provider /models endpoint for live models">
+                <button type="button" class="btn btn-secondary" id="btn-fetch-provider-models" title="Query endpoint for available decision models">
                   ↻ Fetch Models
                 </button>
               </div>
               <datalist id="provider-model-datalist"></datalist>
               <small class="field-help" id="setting-model-help">
-                Pick a recommended model or click "Fetch Models" to load live models from the provider.
+                Type any Jev or equivalent decision model ID (e.g. <code>typesafe/jev-1.14</code>, <code>cloudflare/clef</code>, <code>pplx-decider-latest</code>, <code>gpt-6-luna</code>).
               </small>
             </div>
 
-            <details id="setting-custom-provider-details" class="custom-provider-details">
-              <summary class="custom-provider-summary">
-                <span>⚙️ Custom Provider URL &amp; General Provider Link (Optional Override / Own Provider)</span>
-              </summary>
-              <fieldset class="custom-provider-fieldset">
-                <legend class="visually-hidden">Custom Provider Endpoint and General Link</legend>
-                <div class="field">
-                  <label for="setting-custom-provider-name">Your Provider Name</label>
-                  <input
-                    type="text"
-                    id="setting-custom-provider-name"
-                    name="custom_provider_name"
-                    class="input"
-                    placeholder="e.g. My NanoGPT / LiteLLM / Local vLLM"
-                  />
+            <fieldset class="provider-radio-fieldset">
+              <legend class="provider-radio-legend">Decision Wire Protocol</legend>
+              <div class="provider-radio-group compact">
+                <div class="provider-radio-option">
+                  <input type="radio" id="setting-wf-systemone" name="provider_wire_format" value="systemone" checked />
+                  <label for="setting-wf-systemone">
+                    <strong>System One / Jev</strong>
+                    <span class="muted-label"><code>state</code> + <code>noul</code> / <code>score</code></span>
+                  </label>
                 </div>
-                <div class="field">
-                  <label for="setting-custom-base-url">API Base URL (OpenAI-Compatible <code>/v1</code>)</label>
+                <div class="provider-radio-option">
+                  <input type="radio" id="setting-wf-openai" name="provider_wire_format" value="openai_decisions" />
+                  <label for="setting-wf-openai">
+                    <strong>OpenAI Decisions</strong>
+                    <span class="muted-label"><code>input</code> + <code>predicate</code> / <code>levels</code></span>
+                  </label>
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="provider-portal-banner" id="setting-provider-portal-banner">
+              <div class="provider-portal-info">
+                <span class="muted-label">Provider Portal / API Keys:</span>
+                <code id="setting-portal-url-display">https://openrouter.ai/keys</code>
+              </div>
+              <button type="button" class="btn btn-xs btn-secondary" id="btn-setting-open-portal">
+                🔗 Open Provider Link ↗
+              </button>
+            </div>
+
+            <div id="setting-custom-meta-box" class="criteria-subbox hidden">
+              <div class="field">
+                <label for="setting-custom-provider-name">Custom Provider Display Name (Optional)</label>
+                <input
+                  type="text"
+                  id="setting-custom-provider-name"
+                  name="custom_provider_name"
+                  class="input"
+                  placeholder="e.g. My Lab Jev Gateway"
+                />
+              </div>
+              <div class="field">
+                <label for="setting-custom-portal-url">Provider Portal / Keys Link (Optional)</label>
+                <div class="input-with-btn">
                   <input
                     type="url"
-                    id="setting-custom-base-url"
-                    name="custom_base_url"
+                    id="setting-custom-portal-url"
+                    name="custom_portal_url"
                     class="input"
-                    placeholder="https://your-provider.example.com/v1"
+                    placeholder="https://your-gateway.example.com/keys"
                     autocorrect="off"
                     autocapitalize="none"
                     spellcheck="false"
                   />
-                  <small class="field-help">
-                    Leave blank to use the selected built-in provider's default endpoint, or set a custom URL for your own provider.
-                  </small>
+                  <button type="button" class="btn btn-secondary" id="btn-open-custom-portal-url" title="Open your custom provider link in the browser">
+                    ↗ Open Link
+                  </button>
                 </div>
-                <div class="field">
-                  <label for="setting-custom-portal-url">General Link for Your Provider (Dashboard / Keys / Docs URL)</label>
-                  <div class="input-with-btn">
-                    <input
-                      type="url"
-                      id="setting-custom-portal-url"
-                      name="custom_portal_url"
-                      class="input"
-                      placeholder="https://your-provider.example.com/keys"
-                      autocorrect="off"
-                      autocapitalize="none"
-                      spellcheck="false"
-                    />
-                    <button type="button" class="btn btn-secondary" id="btn-open-custom-portal-url" title="Open your custom provider link in the browser">
-                      ↗ Open Link
-                    </button>
-                  </div>
-                </div>
-              </fieldset>
-            </details>
+              </div>
+            </div>
 
             <div class="field">
               <label for="setting-max-entries">Max Entries Fetched per RSS Feed</label>
@@ -645,24 +688,40 @@
           </form>
         </div>
 
-        <div class="card form-card max-w-md">
-          <h2>Data &amp; AI Skills Folder</h2>
-          <p class="section-desc" style="margin-bottom: 0.85rem;">
-            Configure the folder where SmartRSSReader stores <code>smart_rss.db</code>, <code>secrets.enc</code>, and provisions the local AI skills (<code>.agents/skills/</code>, <code>AGENTS.md</code>, and <code>./smart-rss</code>).
-          </p>
-          <form id="settings-folder-form">
-            <div class="field">
-              <label for="setting-data-dir">Active Data &amp; AI Skills Folder Path</label>
-              <input type="text" id="setting-data-dir" name="data_dir" class="input" autocorrect="off" autocapitalize="none" spellcheck="false" required />
-              <small class="field-help">
-                Open your AI coding agent inside this folder to manage feeds, Jev queries, and providers without global skills.
-              </small>
-            </div>
+        <div class="settings-side-stack">
+          <div class="card form-card max-w-md">
+            <h2>Import &amp; Export Feeds &amp; Rules (TOML)</h2>
+            <p class="section-desc" style="margin-bottom: 0.85rem;">
+              Export your complete RSS feed list (including <strong>name</strong>, <strong>URL</strong>, <strong>category</strong>, and <strong>tags</strong>) together with all Jev filter rules to an easy-to-read <code>.toml</code> file. API keys are never exported.
+            </p>
+            <p class="section-desc" style="margin-bottom: 0.9rem;">
+              When importing, if any feed URL or filter rule name already exists, SmartRSSReader asks whether to override (<strong>Yes</strong> / <strong>No</strong> / <strong>Override All</strong> / <strong>Cancel</strong>).
+            </p>
             <div class="form-actions">
-              <button type="submit" class="btn btn-primary">Update Folder &amp; Provision Skills</button>
-              <button type="button" class="btn btn-secondary" id="btn-settings-open-folder">📂 Open Folder</button>
+              <button type="button" class="btn btn-primary btn-export-toml">📤 Export to TOML...</button>
+              <button type="button" class="btn btn-secondary btn-import-toml">📥 Import from TOML...</button>
             </div>
-          </form>
+          </div>
+
+          <div class="card form-card max-w-md">
+            <h2>Data &amp; AI Skills Folder</h2>
+            <p class="section-desc" style="margin-bottom: 0.85rem;">
+              Configure the folder where SmartRSSReader stores <code>smart_rss.db</code>, <code>secrets.enc</code>, and provisions the local AI skills (<code>.agents/skills/</code>, <code>AGENTS.md</code>, and <code>./smart-rss</code>).
+            </p>
+            <form id="settings-folder-form">
+              <div class="field">
+                <label for="setting-data-dir">Active Data &amp; AI Skills Folder Path</label>
+                <input type="text" id="setting-data-dir" name="data_dir" class="input" autocorrect="off" autocapitalize="none" spellcheck="false" required />
+                <small class="field-help">
+                  Open your AI coding agent inside this folder to manage feeds, tags, Jev queries, TOML import/export, and provider settings without global skills.
+                </small>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Update Folder &amp; Provision Skills</button>
+                <button type="button" class="btn btn-secondary" id="btn-settings-open-folder">📂 Open Folder</button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     </section>
@@ -718,7 +777,7 @@
       <!-- Mode B: Setup / Encrypt new key -->
       <form id="auth-setup-form" class="hidden">
         <p class="modal-desc">
-          Select an AI provider (OpenRouter, NanoGPT, OpenCode, OpenAI, Anthropic, Gemini, or your own Custom Provider), enter your API key, and encrypt it locally.
+          Pick a Decision-Model provider (OpenRouter, NanoGPT, TypeSafe Direct, Perplexity, OpenAI Decisions, OfoxAI, or Custom), verify the API URL &amp; model name, and encrypt your API key locally.
         </p>
         <div id="setup-auth-error" class="auth-error-banner hidden" role="alert">
           <span class="auth-error-icon" aria-hidden="true">⚠</span>
@@ -727,31 +786,58 @@
           </div>
         </div>
         <div class="field">
-          <label for="setup-provider-select">AI Provider</label>
-          <div class="input-with-btn">
-            <select id="setup-provider-select" name="provider_id" class="select"></select>
-            <button type="button" class="btn btn-secondary" id="btn-auth-open-portal" title="Open provider API key page or custom provider link">
+          <div class="label-with-action">
+            <label for="setup-provider-select">Decision Provider Preset</label>
+            <button type="button" class="btn btn-xs btn-secondary" id="btn-auth-open-portal" title="Open provider API key page or custom provider link">
               🔗 Get Key / Link ↗
             </button>
           </div>
+          <select id="setup-provider-select" name="provider_id" class="select"></select>
+        </div>
+        <div class="field">
+          <label for="setup-provider-api-url">Provider Decisions API URL</label>
+          <input
+            type="url"
+            id="setup-provider-api-url"
+            name="provider_api_url"
+            class="input"
+            value="https://openrouter.ai/api/alpha/decisions"
+            placeholder="https://openrouter.ai/api/alpha/decisions"
+            autocorrect="off"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          />
+        </div>
+        <div class="field">
+          <label for="setup-jev-model">Decision / Jev Model Name</label>
+          <input
+            type="text"
+            id="setup-jev-model"
+            name="jev_model"
+            class="input"
+            value="typesafe/jev-1.14"
+            placeholder="typesafe/jev-1.14"
+            list="provider-model-datalist"
+            autocorrect="off"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          />
         </div>
         <div id="setup-custom-provider-box" class="criteria-subbox hidden">
           <div class="field">
-            <label for="setup-custom-name">Your Provider Name</label>
-            <input type="text" id="setup-custom-name" class="input" placeholder="e.g. My Custom Provider" />
+            <label for="setup-custom-name">Custom Provider Display Name (Optional)</label>
+            <input type="text" id="setup-custom-name" name="custom_provider_name" class="input" placeholder="e.g. My Lab Jev Gateway" />
           </div>
           <div class="field">
-            <label for="setup-custom-base-url">API Base URL (<code>/v1</code>)</label>
-            <input type="url" id="setup-custom-base-url" class="input" placeholder="https://your-provider.example.com/v1" autocorrect="off" autocapitalize="none" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label for="setup-custom-portal-url">General Link for Your Provider</label>
-            <input type="url" id="setup-custom-portal-url" class="input" placeholder="https://your-provider.example.com/keys" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            <label for="setup-custom-portal-url">Provider Portal / Keys Link (Optional)</label>
+            <input type="url" id="setup-custom-portal-url" name="custom_portal_url" class="input" placeholder="https://your-gateway.example.com/keys" autocorrect="off" autocapitalize="none" spellcheck="false" />
           </div>
         </div>
         <div class="field">
-          <label for="setup-apikey-input">Provider API Key</label>
-          <input type="password" id="setup-apikey-input" name="api_key" class="input" placeholder="Paste API key for selected provider..." autocomplete="off" required />
+          <label for="setup-apikey-input"><span id="setup-apikey-label-text">OpenRouter API Key</span></label>
+          <input type="password" id="setup-apikey-input" name="api_key" class="input" placeholder="Paste your OpenRouter API key..." autocomplete="off" required />
         </div>
         <div class="field">
           <label for="setup-password-input">Session Encryption Password</label>
@@ -787,6 +873,106 @@
           <button type="button" class="btn btn-outline" id="btn-replace-key">Add / Change Provider Key</button>
           <button type="button" class="btn btn-ghost" id="btn-unlocked-open-portal">🔗 Provider Portal ↗</button>
         </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- SHARED ACCESSIBLE FILE INPUT FOR TOML IMPORT -->
+  <input
+    type="file"
+    id="toml-import-file-input"
+    class="visually-hidden"
+    accept=".toml,text/plain"
+    aria-label="Choose a TOML configuration file to import"
+  />
+
+  <!-- EXPORT TOML CONFIGURATION DIALOG -->
+  <dialog id="export-toml-dialog" class="modal-dialog modal-dialog-lg" closedby="any" aria-labelledby="export-modal-title">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="export-modal-title">Export Feeds &amp; Filter Rules (TOML)</h2>
+        <button type="button" class="btn-close" id="btn-close-export-dialog" aria-label="Close">✕</button>
+      </div>
+      <p class="modal-desc" id="export-toml-summary">
+        Ready to export RSS feeds (name, URL, category, tags) and Jev filter rules.
+      </p>
+
+      <form id="export-toml-path-form">
+        <div class="field">
+          <label for="export-toml-path-input">Save Directly to File Path</label>
+          <div class="input-with-btn">
+            <input
+              type="text"
+              id="export-toml-path-input"
+              name="export_path"
+              class="input"
+              placeholder="~/SmartRSSReader/smart_rss_config.toml"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              autofocus
+              required
+            />
+            <button type="submit" class="btn btn-primary">💾 Save to File</button>
+          </div>
+          <small class="field-help">
+            Writes the human-readable <code>.toml</code> file directly to disk (works reliably on Linux, macOS, and Windows).
+          </small>
+        </div>
+      </form>
+
+      <div class="modal-actions" style="margin-bottom: 0.85rem;">
+        <button type="button" class="btn btn-secondary" id="btn-download-toml-blob">⬇ Browser Save / Download</button>
+        <button type="button" class="btn btn-outline" id="btn-copy-toml-text">📋 Copy TOML</button>
+      </div>
+
+      <details open>
+        <summary style="font-size: 0.84rem; cursor: pointer; color: var(--text-muted); margin-bottom: 0.45rem;">
+          Preview Generated TOML
+        </summary>
+        <pre class="toml-preview-pre" role="region" aria-label="Exported TOML preview" tabindex="0"><code id="export-toml-preview-code"></code></pre>
+      </details>
+    </div>
+  </dialog>
+
+  <!-- IMPORT TOML CONFLICT RESOLUTION DIALOG -->
+  <dialog id="import-conflict-dialog" class="modal-dialog modal-dialog-lg" closedby="closerequest" aria-labelledby="conflict-modal-title">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="conflict-header-title-row">
+          <h2 id="conflict-modal-title">Existing Item Found</h2>
+          <span class="badge" id="conflict-progress-badge">1 of 1</span>
+        </div>
+        <button type="button" class="btn-close" id="btn-close-conflict-dialog" aria-label="Cancel import">✕</button>
+      </div>
+
+      <p class="modal-desc" id="conflict-overview-text"></p>
+
+      <div class="conflict-item-header">
+        <span class="type-badge" id="conflict-item-type-badge">RSS Feed</span>
+        <strong id="conflict-item-name"></strong>
+      </div>
+
+      <div class="conflict-compare-grid">
+        <div class="conflict-compare-card">
+          <div class="conflict-compare-label">Current in App</div>
+          <div class="conflict-compare-body" id="conflict-existing-details"></div>
+        </div>
+        <div class="conflict-compare-card incoming">
+          <div class="conflict-compare-label">Incoming from TOML</div>
+          <div class="conflict-compare-body" id="conflict-incoming-details"></div>
+        </div>
+      </div>
+
+      <p class="conflict-question">
+        Do you want to <strong>override</strong> the existing item with the version from the TOML file?
+      </p>
+
+      <div class="modal-actions conflict-actions">
+        <button type="button" class="btn btn-primary" id="btn-conflict-yes">Yes, Override</button>
+        <button type="button" class="btn btn-secondary" id="btn-conflict-no" autofocus>No, Keep Existing</button>
+        <button type="button" class="btn btn-outline" id="btn-conflict-override-all">Override All</button>
+        <button type="button" class="btn btn-ghost" id="btn-conflict-cancel">Cancel Import</button>
       </div>
     </div>
   </dialog>

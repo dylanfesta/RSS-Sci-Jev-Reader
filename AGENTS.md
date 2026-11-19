@@ -21,9 +21,11 @@ SmartRSSReader stores its database, encrypted API key, local CLI wrapper (`./sma
 ├── CLAUDE.md                       # Claude Code instructions
 └── .agents/
     └── skills/
-        ├── manage-rss-feeds/       # Skill for adding, testing, and managing RSS feeds
+        ├── manage-rss-feeds/       # Skill for adding, tagging, testing, and managing RSS feeds
         │   └── SKILL.md
-        └── manage-jev-queries/     # Skill for creating, editing, and weighting Jev queries
+        ├── manage-jev-queries/     # Skill for creating, editing, and weighting Jev queries
+        │   └── SKILL.md
+        └── import-export-config/   # Skill for exporting & importing TOML feeds + filter rules
             └── SKILL.md
 ```
 
@@ -62,11 +64,12 @@ AI agents operating inside the Data & AI Skills Folder (or repository root) shou
 # 2. Test / preview a feed URL before adding
 ./smart-rss feeds test --url "https://www.nature.com/neuro.rss" --max-entries 5
 
-# 3. Add or update (upsert by URL) an RSS feed (auto-detects title if --title omitted)
+# 3. Add or update (upsert by URL) an RSS feed with category and tags (auto-detects title if --title omitted)
 ./smart-rss feeds add \
   --url "https://www.nature.com/neuro.rss" \
   --title "Nature Neuroscience" \
   --category "Neuroscience" \
+  --tags "neuroscience" "peer-reviewed" \
   --test
 
 # 4. Remove a feed by URL or ID
@@ -106,27 +109,56 @@ AI agents operating inside the Data & AI Skills Folder (or repository root) shou
 ./smart-rss queries remove --name "Uses fMRI or EEG (Penalty)"
 ```
 
-### C. Managing AI Providers & Custom Provider Links
+### C. Configuring Decision Providers, API URL & Model Name
 
-SmartRSSReader supports **29+ AI providers** (OpenRouter, NanoGPT, OpenCode Zen, OpenAI, Anthropic, Google Gemini, DeepSeek, xAI Grok, Mistral, Groq, Cerebras, Together AI, Fireworks AI, Venice AI, Chutes AI, SiliconFlow, Z.ai, Perplexity, DeepInfra, Hyperbolic, Featherless AI, SambaNova, Nebius, NVIDIA NIM, GitHub Models, Novita AI, Ollama, LM Studio, and **Custom / Own Provider** with custom API Base URL and General Link).
+SmartRSSReader natively supports **all major System One / Decision-Model providers** (zero chat-completion text hacks) across both wire dialects (`systemone` and `openai_decisions`):
+- **Multi-Model Decision Gateways**: `openrouter` (`https://openrouter.ai/api/alpha/decisions`), `nanogpt` (`https://api.nano-gpt.com/api/v1/systemone`), `ofox` (`https://api.ofox.ai/typesafe/v1/systemone`)
+- **First-Party Decision Labs**: `typesafe` (`https://api.typesafe.ai/v1/systemone` · `jev-latest`), `perplexity` (`https://api.perplexity.ai/v1/decisions` · `pplx-decider-latest`), `openai-decisions` (`https://api.openai.com/v1/decisions` · `gpt-6-luna`)
+- **Local & Custom Gateways**: `local-decider` (`http://127.0.0.1:8080/v1/decisions`), `litellm` (`http://127.0.0.1:4000/v1/systemone`), `custom`
+
+Both the **Provider Decisions API URL** and **Decision Model Name** remain directly editable for any provider.
 
 ```bash
-# 1. List all 29+ built-in providers and the currently active provider configuration
+# 1. Inspect all Decision-Model provider presets and the active URL + model
 ./smart-rss providers list
 
-# 2. Switch to NanoGPT (or OpenRouter, OpenCode, Groq, DeepSeek, Ollama, etc.)
-./smart-rss providers set --provider nanogpt --model "deepseek/deepseek-chat"
+# 2. Switch to NanoGPT (auto-sets https://api.nano-gpt.com/api/v1/systemone + typesafe/jev-1.14)
+./smart-rss providers set --provider nanogpt
 
-# 3. Configure your own Custom Provider with a General Link (Dashboard / Keys / Docs URL)
+# 3. Switch to Perplexity Decisions or OpenAI Decisions (gpt-6-luna)
+./smart-rss providers set --provider perplexity --model "pplx-decider-latest"
+./smart-rss providers set --provider openai-decisions --model "gpt-6-luna"
+
+# 4. Point to a custom System One or OpenAI Decisions gateway URL and model
 ./smart-rss providers set \
   --provider custom \
-  --custom-name "My Lab vLLM Gateway" \
-  --base-url "https://llm.mylab.org/v1" \
-  --portal-url "https://llm.mylab.org/dashboard/keys" \
-  --model "qwen-2.5-72b-instruct"
+  --custom-name "My Lab Decision Gateway" \
+  --api-url "https://jev.mylab.org/v1/systemone" \
+  --wire-format systemone \
+  --model "cloudflare/clef"
 ```
 
-### D. Inspecting or Resetting Ranked Entries
+### D. Exporting & Importing Feeds + Filter Rules as TOML (`import-export-config` skill)
+
+Export your entire RSS feed list (including `name`, `url`, `category`, `tags`, `enabled`) and Jev filter rules (`[[rules]]`) to an easy-to-read `.toml` file—or import a `.toml` file with safe conflict detection (existing feed URLs or filter rule names prompt for **Override Yes/No**, **Override All**, or **Cancel**):
+
+```bash
+# 1. Export feeds and filter rules to a TOML file (or pass --stdout for raw TOML)
+./smart-rss config export --file ./smart_rss_config.toml
+
+# 2. Preview an import first (detects conflicts without modifying smart_rss.db)
+./smart-rss config import --file ./smart_rss_config.toml --dry-run
+
+# 3. Import with explicit conflict handling (after asking the user if conflicts exist)
+./smart-rss config import --file ./smart_rss_config.toml --on-conflict override-all
+./smart-rss config import --file ./smart_rss_config.toml --on-conflict skip-existing
+./smart-rss config import --file ./smart_rss_config.toml \
+  --on-conflict skip-existing \
+  --override-feeds "https://www.nature.com/neuro.rss" \
+  --override-rules "Neuroscience Paper"
+```
+
+### E. Inspecting or Resetting Ranked Entries
 
 ```bash
 # View top 10 ranked active entries as JSON
@@ -141,16 +173,21 @@ SmartRSSReader supports **29+ AI providers** (OpenRouter, NanoGPT, OpenCode Zen,
 ## 3. HTTP REST API for Agents (When Desktop App is Open on `127.0.0.1:8765`)
 
 - `GET /api/feeds` — List all RSS feeds.
-- `POST /api/agent/feeds` — Idempotent upsert by `url`:
+- `POST /api/agent/feeds` — Idempotent upsert by `url` (supports optional `tags`):
   ```json
   {
     "url": "https://www.nature.com/neuro.rss",
     "title": "Nature Neuroscience",
     "category": "Neuroscience",
+    "tags": ["neuroscience", "peer-reviewed"],
     "enabled": true,
     "validate_first": true
   }
   ```
+- `GET /api/config/export` — Export RSS feeds (with categories & tags) and filter rules as TOML.
+- `POST /api/config/export-file` — Write exported TOML directly to `{ "path": "/path/to/config.toml" }`.
+- `POST /api/config/import/preview` — Validate TOML (`{ "toml": "..." }` or `{ "path": "..." }`) and detect conflicts against existing feeds/rules.
+- `POST /api/config/import/apply` — Apply TOML import with `{ "toml": "...", "override_all": false, "override_feed_urls": [...], "override_rule_names": [...] }`.
 - `GET /api/queries` — List all Jev queries.
 - `POST /api/agent/queries` — Idempotent upsert by `name` or `id` (supports partial updates like changing only `weight`):
   ```json

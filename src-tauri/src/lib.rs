@@ -1,4 +1,5 @@
 pub mod agent_cli;
+pub mod config_toml;
 pub mod crypto_store;
 pub mod database;
 pub mod jev_client;
@@ -6,14 +7,18 @@ pub mod rss_service;
 pub mod skills_provisioner;
 pub mod sqlite_conn;
 
+use crate::config_toml::{
+    apply_toml_import, export_to_toml_string, preview_toml_import, ImportApplyOptions,
+};
 use crate::crypto_store::{CryptoError, CryptoStore};
 use crate::database::{Database, DEFAULT_ARCHIVE_RETENTION_DAYS};
 use crate::jev_client::{
     evaluate_entry_queries_with_provider, fetch_provider_models, get_provider_spec,
-    list_providers_json, resolve_active_provider_config, test_single_query_with_provider,
+    list_providers_json, normalize_wire_format, resolve_active_provider_config,
+    test_single_query_with_provider,
 };
 use crate::rss_service::fetch_and_parse_feed;
-use crate::skills_provisioner::WorkspaceManager;
+use crate::skills_provisioner::{expand_tilde, WorkspaceManager};
 use axum::{
     body::Bytes,
     extract::{Request, State},
@@ -171,34 +176,60 @@ pub async fn dispatch_api_request(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        let mut updates = HashMap::new();
         if let Some(ref pid) = provider_id {
-            let pid_lower = pid.to_lowercase();
-            let current_settings = state.db.get_settings().unwrap_or_default();
-            let mut updates = HashMap::new();
-            updates.insert("ai_provider".to_string(), pid_lower.clone());
-            if let Some(m) = body_obj.get("jev_model").and_then(|v| v.as_str()) {
-                if !m.trim().is_empty() {
-                    updates.insert("jev_model".to_string(), m.trim().to_string());
+            let spec = get_provider_spec(pid);
+            updates.insert("ai_provider".to_string(), spec.id.to_string());
+            if body_obj.get("provider_api_url").is_none() && body_obj.get("custom_base_url").is_none() {
+                updates.insert("provider_api_url".to_string(), spec.api_url.to_string());
+            }
+            if body_obj.get("provider_wire_format").is_none() {
+                updates.insert(
+                    "provider_wire_format".to_string(),
+                    spec.wire_format.to_string(),
+                );
+            }
+            if body_obj.get("jev_model").is_none() {
+                updates.insert("jev_model".to_string(), spec.default_model.to_string());
+            }
+        }
+        if let Some(wf) = body_obj.get("provider_wire_format").and_then(|v| v.as_str()) {
+            if !wf.trim().is_empty() {
+                updates.insert(
+                    "provider_wire_format".to_string(),
+                    normalize_wire_format(wf).to_string(),
+                );
+            }
+        }
+        if let Some(m) = body_obj.get("jev_model").and_then(|v| v.as_str()) {
+            if !m.trim().is_empty() {
+                updates.insert("jev_model".to_string(), m.trim().to_string());
+            }
+        }
+        if let Some(api_u) = body_obj
+            .get("provider_api_url")
+            .or_else(|| body_obj.get("custom_base_url"))
+            .and_then(|v| v.as_str())
+        {
+            let clean = api_u.trim();
+            if !clean.is_empty() {
+                if !clean.starts_with("http://") && !clean.starts_with("https://") {
+                    return Err((
+                        400,
+                        "Provider Decisions API URL must start with http:// or https://."
+                            .to_string(),
+                    ));
                 }
-            } else if pid_lower != "openrouter" {
-                let existing_model = current_settings
-                    .get("jev_model")
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                if existing_model.is_empty() || existing_model.starts_with("typesafe/jev") {
-                    let spec = get_provider_spec(&pid_lower);
-                    updates.insert("jev_model".to_string(), spec.default_model.to_string());
-                }
+                updates.insert("provider_api_url".to_string(), clean.to_string());
             }
-            if let Some(bu) = body_obj.get("custom_base_url").and_then(|v| v.as_str()) {
-                updates.insert("custom_base_url".to_string(), bu.trim().to_string());
-            }
-            if let Some(pu) = body_obj.get("custom_portal_url").and_then(|v| v.as_str()) {
-                updates.insert("custom_portal_url".to_string(), pu.trim().to_string());
-            }
-            if let Some(cn) = body_obj.get("custom_provider_name").and_then(|v| v.as_str()) {
-                updates.insert("custom_provider_name".to_string(), cn.trim().to_string());
-            }
+        }
+        if let Some(pu) = body_obj.get("custom_portal_url").and_then(|v| v.as_str()) {
+            updates.insert("custom_portal_url".to_string(), pu.trim().to_string());
+        }
+        if let Some(cn) = body_obj.get("custom_provider_name").and_then(|v| v.as_str()) {
+            updates.insert("custom_provider_name".to_string(), cn.trim().to_string());
+        }
+        if !updates.is_empty() {
             let _ = state.db.update_settings(&updates);
         }
 
@@ -308,17 +339,24 @@ pub async fn dispatch_api_request(
                 settings.insert("ai_provider".to_string(), pid.trim().to_lowercase());
             }
         }
-        if let Some(bu) = body_obj.get("custom_base_url").and_then(|v| v.as_str()) {
-            settings.insert("custom_base_url".to_string(), bu.trim().to_string());
+        if let Some(bu) = body_obj
+            .get("provider_api_url")
+            .or_else(|| body_obj.get("custom_base_url"))
+            .and_then(|v| v.as_str())
+        {
+            if !bu.trim().is_empty() {
+                settings.insert("provider_api_url".to_string(), bu.trim().to_string());
+            }
         }
         let cfg = resolve_active_provider_config(&settings);
         let api_key = state.crypto.get_api_key_for_provider(&cfg.provider_id);
-        let models = fetch_provider_models(&cfg, api_key.as_deref())
+        let (models, source) = fetch_provider_models(&cfg, api_key.as_deref())
             .await
             .map_err(|e| (400, e))?;
         return Ok(json!({
             "provider_id": cfg.provider_id,
             "models": models,
+            "source": source,
         }));
     }
 
@@ -345,18 +383,48 @@ pub async fn dispatch_api_request(
             if !p.trim().is_empty() {
                 let spec = get_provider_spec(p);
                 updates.insert("ai_provider".to_string(), spec.id.to_string());
+                if body_obj.get("provider_wire_format").is_none() {
+                    updates.insert(
+                        "provider_wire_format".to_string(),
+                        spec.wire_format.to_string(),
+                    );
+                }
+            }
+        }
+        if let Some(wf) = body_obj.get("provider_wire_format").and_then(|v| v.as_str()) {
+            if !wf.trim().is_empty() {
+                updates.insert(
+                    "provider_wire_format".to_string(),
+                    normalize_wire_format(wf).to_string(),
+                );
             }
         }
         if let Some(m) = body_obj.get("jev_model").and_then(|v| v.as_str()) {
-            if !m.trim().is_empty() {
-                updates.insert("jev_model".to_string(), m.trim().to_string());
+            let clean = m.trim();
+            if clean.is_empty() {
+                return Err((400, "Jev model name cannot be empty.".to_string()));
+            }
+            updates.insert("jev_model".to_string(), clean.to_string());
+        }
+        if let Some(api_u) = body_obj
+            .get("provider_api_url")
+            .or_else(|| body_obj.get("custom_base_url"))
+            .and_then(|v| v.as_str())
+        {
+            let clean = api_u.trim();
+            if !clean.is_empty() {
+                if !clean.starts_with("http://") && !clean.starts_with("https://") {
+                    return Err((
+                        400,
+                        "Provider Decisions API URL must start with http:// or https://."
+                            .to_string(),
+                    ));
+                }
+                updates.insert("provider_api_url".to_string(), clean.to_string());
             }
         }
         if let Some(cn) = body_obj.get("custom_provider_name").and_then(|v| v.as_str()) {
             updates.insert("custom_provider_name".to_string(), cn.trim().to_string());
-        }
-        if let Some(bu) = body_obj.get("custom_base_url").and_then(|v| v.as_str()) {
-            updates.insert("custom_base_url".to_string(), bu.trim().to_string());
         }
         if let Some(pu) = body_obj.get("custom_portal_url").and_then(|v| v.as_str()) {
             updates.insert("custom_portal_url".to_string(), pu.trim().to_string());
@@ -399,6 +467,10 @@ pub async fn dispatch_api_request(
             .get("category")
             .and_then(|v| v.as_str())
             .unwrap_or("General");
+        let tags = body_obj
+            .get("tags")
+            .and_then(Database::parse_tags_from_value)
+            .unwrap_or_default();
         let enabled = body_obj
             .get("enabled")
             .and_then(json_as_bool)
@@ -409,7 +481,7 @@ pub async fn dispatch_api_request(
         }
         let feed = state
             .db
-            .create_feed(title, url, category, enabled)
+            .create_feed_with_tags(title, url, category, &tags, enabled)
             .map_err(|e| (400, format!("Could not create feed: {}", e)))?;
         return Ok(json!({ "feed": feed }));
     }
@@ -674,10 +746,13 @@ pub async fn dispatch_api_request(
                 let title = body_obj.get("title").and_then(|v| v.as_str());
                 let url = body_obj.get("url").and_then(|v| v.as_str());
                 let category = body_obj.get("category").and_then(|v| v.as_str());
+                let tags = body_obj
+                    .get("tags")
+                    .and_then(Database::parse_tags_from_value);
                 let enabled = body_obj.get("enabled").and_then(json_as_bool);
                 let updated = state
                     .db
-                    .update_feed(feed_id, title, url, category, enabled)
+                    .update_feed(feed_id, title, url, category, tags.as_deref(), enabled)
                     .map_err(|e| (400, format!("Could not update feed: {}", e)))?;
                 match updated {
                     Some(f) => return Ok(json!({ "feed": f })),
@@ -951,6 +1026,9 @@ pub async fn dispatch_api_request(
             .trim()
             .to_string();
         let category = body_obj.get("category").and_then(|v| v.as_str());
+        let tags = body_obj
+            .get("tags")
+            .and_then(Database::parse_tags_from_value);
         let enabled = body_obj.get("enabled").and_then(json_as_bool);
         let validate_first = body_obj
             .get("validate_first")
@@ -982,7 +1060,7 @@ pub async fn dispatch_api_request(
 
         let feed = state
             .db
-            .upsert_feed(&resolved_title, &url, category, enabled)
+            .upsert_feed(&resolved_title, &url, category, tags.as_deref(), enabled)
             .map_err(|e| (400, e))?;
         let counts = state.db.get_counts().map_err(|e| (400, e))?;
         let mut out = json!({
@@ -1039,6 +1117,117 @@ pub async fn dispatch_api_request(
             "query": query,
             "top_active_entries_preview": preview,
         }));
+    }
+
+    // --- TOML Config Export / Import Endpoints ---
+    if path == "/api/config/export" && method_upper == "GET" {
+        let (toml_text, feeds_count, rules_count) =
+            export_to_toml_string(&state.db).map_err(|e| (400, e))?;
+        let default_path = state
+            .workspace
+            .get_data_dir()
+            .join("smart_rss_config.toml");
+        return Ok(json!({
+            "toml": toml_text,
+            "feeds_count": feeds_count,
+            "rules_count": rules_count,
+            "suggested_filename": "smart_rss_config.toml",
+            "default_export_path": default_path.to_string_lossy(),
+        }));
+    }
+
+    if path == "/api/config/export-file" && method_upper == "POST" {
+        let raw_path = body_obj
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+        let target_path = match raw_path {
+            Some(p) => expand_tilde(p),
+            None => state
+                .workspace
+                .get_data_dir()
+                .join("smart_rss_config.toml"),
+        };
+        if let Some(parent) = target_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| (400, format!("Failed to create parent folder: {}", e)))?;
+            }
+        }
+        let (toml_text, feeds_count, rules_count) =
+            export_to_toml_string(&state.db).map_err(|e| (400, e))?;
+        std::fs::write(&target_path, &toml_text)
+            .map_err(|e| (400, format!("Failed to write '{}': {}", target_path.display(), e)))?;
+        return Ok(json!({
+            "exported": true,
+            "path": target_path.to_string_lossy(),
+            "feeds_count": feeds_count,
+            "rules_count": rules_count,
+        }));
+    }
+
+    if path == "/api/config/import/preview" && method_upper == "POST" {
+        let raw_toml = if let Some(t) = body_obj.get("toml").and_then(|v| v.as_str()) {
+            t.to_string()
+        } else if let Some(p) = body_obj.get("path").and_then(|v| v.as_str()) {
+            let resolved = expand_tilde(p.trim());
+            std::fs::read_to_string(&resolved)
+                .map_err(|e| (400, format!("Failed to read '{}': {}", resolved.display(), e)))?
+        } else {
+            return Err((400, "Provide either 'toml' text or a 'path' to preview.".to_string()));
+        };
+        let preview = preview_toml_import(&state.db, &raw_toml).map_err(|e| (400, e))?;
+        return Ok(serde_json::to_value(preview).unwrap_or_else(|_| json!({})));
+    }
+
+    if path == "/api/config/import/apply" && method_upper == "POST" {
+        let raw_toml = if let Some(t) = body_obj.get("toml").and_then(|v| v.as_str()) {
+            t.to_string()
+        } else if let Some(p) = body_obj.get("path").and_then(|v| v.as_str()) {
+            let resolved = expand_tilde(p.trim());
+            std::fs::read_to_string(&resolved)
+                .map_err(|e| (400, format!("Failed to read '{}': {}", resolved.display(), e)))?
+        } else {
+            return Err((400, "Provide either 'toml' text or a 'path' to import.".to_string()));
+        };
+
+        let override_all = body_obj
+            .get("override_all")
+            .and_then(json_as_bool)
+            .unwrap_or(false);
+        let override_feed_urls = body_obj
+            .get("override_feed_urls")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_lowercase()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let override_rule_names = body_obj
+            .get("override_rule_names")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_lowercase()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let opts = ImportApplyOptions {
+            override_all,
+            override_feed_urls,
+            override_rule_names,
+        };
+
+        let summary = apply_toml_import(&state.db, &raw_toml, &opts).map_err(|e| (400, e))?;
+        let counts = state.db.get_counts().map_err(|e| (400, e))?;
+        let mut out = serde_json::to_value(summary).unwrap_or_else(|_| json!({}));
+        if let Some(obj) = out.as_object_mut() {
+            obj.insert("counts".to_string(), counts);
+        }
+        return Ok(out);
     }
 
     Err((404, format!("Endpoint not found: {} {}", method_upper, path)))
@@ -1658,18 +1847,24 @@ mod tests {
                 "https://www.cell.com/neuron/current.rss",
                 Some("Neuron"),
                 Some("Neuroscience"),
+                Some(&["peer-reviewed".to_string(), "neuroscience".to_string()]),
                 Some(true),
                 false,
             )
             .await
             .unwrap();
         assert_eq!(f_res["feed"]["title"], "Neuron");
+        assert_eq!(
+            f_res["feed"]["tags"],
+            json!(["peer-reviewed", "neuroscience"])
+        );
 
         let f_res2 = api
             .upsert_feed(
                 "https://www.cell.com/neuron/current.rss",
                 Some("Neuron (Cell Press)"),
                 Some("Neuroscience"),
+                None,
                 Some(true),
                 false,
             )
@@ -1677,6 +1872,11 @@ mod tests {
             .unwrap();
         assert_eq!(f_res2["feed"]["id"], f_res["feed"]["id"]);
         assert_eq!(f_res2["feed"]["title"], "Neuron (Cell Press)");
+        // Existing tags preserved when None passed
+        assert_eq!(
+            f_res2["feed"]["tags"],
+            json!(["peer-reviewed", "neuroscience"])
+        );
 
         // CLI commands (`queries set`, `queries weight`, `feeds list`, `entries list`)
         let args1 = CliArgs::try_parse_from([
@@ -1931,6 +2131,9 @@ mod tests {
         assert!(folder_a
             .join(".agents/skills/manage-jev-queries/SKILL.md")
             .exists());
+        assert!(folder_a
+            .join(".agents/skills/import-export-config/SKILL.md")
+            .exists());
         assert!(folder_a.join("AGENTS.md").exists());
         assert!(folder_a.join("GEMINI.md").exists());
         assert!(folder_a.join("CLAUDE.md").exists());
@@ -1953,6 +2156,9 @@ mod tests {
         assert!(folder_b
             .join(".agents/skills/manage-jev-queries/SKILL.md")
             .exists());
+        assert!(folder_b
+            .join(".agents/skills/import-export-config/SKILL.md")
+            .exists());
         assert!(folder_b.join("smart-rss").exists());
         assert!(folder_b.join("smart_rss.db").exists());
 
@@ -1960,18 +2166,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_multi_provider_catalog_nanogpt_and_custom_provider() {
+    async fn test_jev_provider_url_and_model_configuration_and_migration() {
         let base_path = create_temp_dir("providers_test");
-        let state = AppState::new(Some(base_path.join("prov_data")), true).unwrap();
+        let data_dir = base_path.join("prov_data");
+        let state = AppState::new(Some(data_dir.clone()), true).unwrap();
 
         let r_provs = dispatch_api_request(&state, "GET", "/api/providers", None)
             .await
             .unwrap();
         let prov_list = r_provs["providers"].as_array().unwrap();
-        assert!(prov_list.len() >= 25);
-        assert!(prov_list.iter().any(|p| p["id"] == "nanogpt"));
-        assert!(prov_list.iter().any(|p| p["id"] == "opencode"));
-        assert!(prov_list.iter().any(|p| p["id"] == "custom"));
+        assert_eq!(prov_list.len(), 9);
+        for expected_id in [
+            "openrouter",
+            "nanogpt",
+            "ofox",
+            "typesafe",
+            "perplexity",
+            "openai-decisions",
+            "local-decider",
+            "litellm",
+            "custom",
+        ] {
+            assert!(
+                prov_list.iter().any(|p| p["id"] == expected_id),
+                "Missing provider preset {}",
+                expected_id
+            );
+        }
+        assert_eq!(
+            r_provs["active_provider"]["api_url"],
+            "https://openrouter.ai/api/alpha/decisions"
+        );
+        assert_eq!(r_provs["active_provider"]["model"], "typesafe/jev-1.14");
+        assert_eq!(r_provs["active_provider"]["wire_format"], "systemone");
 
         // Save OpenRouter key and NanoGPT key under the same master password
         dispatch_api_request(
@@ -1980,6 +2207,8 @@ mod tests {
             "/api/auth/setup",
             Some(json!({
                 "provider_id": "openrouter",
+                "provider_api_url": "https://openrouter.ai/api/alpha/decisions",
+                "jev_model": "typesafe/jev-1.15-preview",
                 "api_key": "sk-or-v1-openrouter-key-1111",
                 "password": "master-password"
             })),
@@ -1993,15 +2222,24 @@ mod tests {
             "/api/auth/setup",
             Some(json!({
                 "provider_id": "nanogpt",
-                "api_key": "nk-nanogpt-secret-key-2222",
-                "password": "master-password",
-                "jev_model": "deepseek-chat"
+                "api_key": "nk-nanogpt-key-2222",
+                "password": "master-password"
             })),
         )
         .await
         .unwrap();
 
-        // Lock & unlock and verify both provider keys are preserved
+        let r_after_nanogpt = dispatch_api_request(&state, "GET", "/api/settings", None)
+            .await
+            .unwrap();
+        assert_eq!(r_after_nanogpt["active_provider"]["provider_id"], "nanogpt");
+        assert_eq!(
+            r_after_nanogpt["active_provider"]["api_url"],
+            "https://api.nano-gpt.com/api/v1/systemone"
+        );
+        assert_eq!(r_after_nanogpt["active_provider"]["model"], "typesafe/jev-1.14");
+
+        // Lock & unlock and verify BOTH OpenRouter and NanoGPT keys are preserved in encrypted store
         dispatch_api_request(&state, "POST", "/api/auth/lock", None)
             .await
             .unwrap();
@@ -2020,39 +2258,656 @@ mod tests {
         );
         assert_eq!(
             state.crypto.get_api_key_for_provider("nanogpt").as_deref(),
-            Some("nk-nanogpt-secret-key-2222")
+            Some("nk-nanogpt-key-2222")
         );
 
-        // Configure custom provider with general link and custom base_url
-        let r_custom = dispatch_api_request(
+        // Verify TypeSafe Direct preserves 'jev-latest' without rewriting to 'typesafe/jev-1.14'
+        let r_typesafe = dispatch_api_request(
             &state,
             "PUT",
             "/api/settings",
             Some(json!({
-                "ai_provider": "custom",
-                "jev_model": "my-custom-llm-v1",
-                "custom_provider_name": "My Lab vLLM Cluster",
-                "custom_base_url": "https://llm.mylab.org/v1",
-                "custom_portal_url": "https://portal.mylab.org/keys"
+                "ai_provider": "typesafe",
+                "provider_api_url": "https://api.typesafe.ai/v1/systemone",
+                "jev_model": "jev-latest"
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r_typesafe["active_provider"]["model"], "jev-latest");
+
+        // Verify OpenAI Decisions switches wire_format to openai_decisions
+        let r_openai = dispatch_api_request(
+            &state,
+            "PUT",
+            "/api/settings",
+            Some(json!({
+                "ai_provider": "openai-decisions",
+                "provider_api_url": "https://api.openai.com/v1/decisions",
+                "jev_model": "gpt-6-luna"
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            r_openai["active_provider"]["wire_format"],
+            "openai_decisions"
+        );
+        assert_eq!(r_openai["active_provider"]["model"], "gpt-6-luna");
+
+        // Verify legacy DB settings (e.g. old nanogpt chat URL + gpt-4o-mini) migrate cleanly on reopen
+        let mut legacy = HashMap::new();
+        legacy.insert("ai_provider".to_string(), "nanogpt".to_string());
+        legacy.insert(
+            "provider_api_url".to_string(),
+            "https://nano-gpt.com/api/v1".to_string(),
+        );
+        legacy.insert("jev_model".to_string(), "gpt-4o-mini".to_string());
+        state.db.update_settings(&legacy).unwrap();
+
+        let reopened = Database::new(data_dir.join("smart_rss.db"), false).unwrap();
+        let migrated_settings = reopened.get_settings().unwrap();
+        let resolved = resolve_active_provider_config(&migrated_settings);
+        assert_eq!(resolved.provider_id, "nanogpt");
+        assert_eq!(resolved.api_url, "https://api.nano-gpt.com/api/v1/systemone");
+        assert_eq!(resolved.model, "typesafe/jev-1.14");
+
+        let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[tokio::test]
+    async fn test_wire_format_compatibility_across_nanogpt_typesafe_perplexity_and_openai_decisions() {
+        use axum::{routing::post, Json};
+
+        // Start a local mock server implementing both SystemOne (NanoGPT / TypeSafe / Perplexity) and OpenAI /v1/decisions
+        let mock_app = Router::new()
+            .route(
+                "/api/v1/systemone",
+                post(|Json(body): Json<Value>| async move {
+                    // Verify TypeSafe / NanoGPT SystemOne request shape
+                    assert!(body.get("state").unwrap().is_object());
+                    let model = body["model"].as_str().unwrap_or("");
+                    let qs = body["questions"].as_object().unwrap();
+                    let mut answers = serde_json::Map::new();
+                    for (k, q) in qs {
+                        if q["type"] == "noul" {
+                            answers.insert(k.clone(), json!({ "type": "noul", "noul": 0.88, "confidence": 0.92 }));
+                        } else {
+                            // TypeSafe /v1/systemone returns index-keyed probabilities + object legend
+                            answers.insert(
+                                k.clone(),
+                                json!({
+                                    "type": "score",
+                                    "score": 1.75,
+                                    "confidence": 0.85,
+                                    "legend": { "0": "None", "1": "Moderate", "2": "Deep" },
+                                    "probabilities": { "0": 0.05, "1": 0.15, "2": 0.80 }
+                                }),
+                            );
+                        }
+                    }
+                    Json(json!({ "model": model, "answers": answers }))
+                }),
+            )
+            .route(
+                "/perplexity/v1/decisions",
+                post(|Json(body): Json<Value>| async move {
+                    assert_eq!(body["model"], "pplx-decider-latest");
+                    let qs = body["questions"].as_object().unwrap();
+                    let mut answers = serde_json::Map::new();
+                    for (k, q) in qs {
+                        if q["type"] == "noul" {
+                            answers.insert(k.clone(), json!({ "type": "noul", "noul": 0.75 }));
+                        } else {
+                            // Perplexity returns label-keyed probabilities + expected_score
+                            answers.insert(
+                                k.clone(),
+                                json!({
+                                    "type": "score",
+                                    "expected_score": 2.30,
+                                    "probabilities": {
+                                        "None": 0.10,
+                                        "Moderate": 0.50,
+                                        "Deep": 0.40
+                                    }
+                                }),
+                            );
+                        }
+                    }
+                    Json(json!({ "model": "pplx-decider-latest", "answers": answers }))
+                }),
+            )
+            .route(
+                "/openai/v1/decisions",
+                post(|Json(body): Json<Value>| async move {
+                    // Verify OpenAI /v1/decisions wire format: string input + questions array with predicate & levels
+                    assert_eq!(body["model"], "gpt-6-luna");
+                    assert!(body["input"].as_str().unwrap().contains("Title: Cortical Dynamics"));
+                    let qs = body["questions"].as_array().unwrap();
+                    let mut answers_arr = Vec::new();
+                    for q in qs {
+                        let name = q["name"].as_str().unwrap();
+                        if q["type"] == "predicate" {
+                            answers_arr.push(json!({
+                                "type": "predicate",
+                                "name": name,
+                                "probability": 0.91,
+                                "confidence": 0.94
+                            }));
+                        } else {
+                            assert_eq!(q["levels"].as_array().unwrap().len(), 3);
+                            answers_arr.push(json!({
+                                "type": "score",
+                                "name": name,
+                                "score": 1.65,
+                                "confidence": 0.89,
+                                "probabilities": [
+                                    { "level": "level_1", "probability": 0.05 },
+                                    { "level": "level_2", "probability": 0.25 },
+                                    { "level": "level_3", "probability": 0.70 }
+                                ]
+                            }));
+                        }
+                    }
+                    Json(json!({ "model": "gpt-6-luna", "answers": answers_arr }))
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, mock_app).await;
+        });
+
+        let sample_entry = json!({
+            "journal_title": "Neuron",
+            "title": "Cortical Dynamics",
+            "authors": "A. Researcher",
+            "published_at": "2026-11-19",
+            "summary": "Computational modeling of cortical circuits.",
+            "link": "https://example.org/p1"
+        });
+        let queries = vec![
+            json!({
+                "id": 10,
+                "name": "Is Neuroscience",
+                "query_type": "noul",
+                "instructions": "Is this neuroscience?",
+                "criteria": { "true": "Neuroscience", "false": "Other" },
+                "weight": 2.0,
+                "enabled": true
+            }),
+            json!({
+                "id": 20,
+                "name": "Model Depth",
+                "query_type": "score",
+                "instructions": "Rate modeling depth.",
+                "criteria": ["None", "Moderate", "Deep"],
+                "weight": 1.0,
+                "enabled": true
+            }),
+        ];
+
+        // 1. Test TypeSafe / NanoGPT SystemOne endpoint (with 'jev-latest' preserved + object legend normalized to array)
+        let cfg_systemone = crate::jev_client::ActiveProviderConfig {
+            provider_id: "typesafe".to_string(),
+            provider_name: "TypeSafe AI".to_string(),
+            api_url: format!("http://{}/api/v1/systemone", addr),
+            portal_url: String::new(),
+            wire_format: "systemone".to_string(),
+            model: "jev-latest".to_string(),
+            requires_key: true,
+        };
+        let res_sys = evaluate_entry_queries_with_provider(
+            &sample_entry,
+            &queries,
+            "ts-test-key",
+            &cfg_systemone,
+        )
+        .await
+        .unwrap();
+        assert!((res_sys[&10]["normalized_score"].as_f64().unwrap() - 0.88).abs() < 1e-4);
+        // Expected idx = 0*0.05 + 1*0.15 + 2*0.80 = 1.75 -> norm = 1.75 / 2 = 0.875
+        assert!((res_sys[&20]["normalized_score"].as_f64().unwrap() - 0.875).abs() < 1e-4);
+        assert!(res_sys[&20]["raw_response"]["legend"].is_array());
+
+        // 2. Test Perplexity /v1/decisions endpoint (label-keyed probabilities + expected_score)
+        let cfg_pplx = crate::jev_client::ActiveProviderConfig {
+            provider_id: "perplexity".to_string(),
+            provider_name: "Perplexity Decisions".to_string(),
+            api_url: format!("http://{}/perplexity/v1/decisions", addr),
+            portal_url: String::new(),
+            wire_format: "systemone".to_string(),
+            model: "pplx-decider-latest".to_string(),
+            requires_key: true,
+        };
+        let res_pplx = evaluate_entry_queries_with_provider(
+            &sample_entry,
+            &queries,
+            "pplx-test-key",
+            &cfg_pplx,
+        )
+        .await
+        .unwrap();
+        assert!((res_pplx[&10]["normalized_score"].as_f64().unwrap() - 0.75).abs() < 1e-4);
+        // Expected idx = 0*0.10 + 1*0.50 + 2*0.40 = 1.30 -> norm = 1.30 / 2 = 0.65
+        assert!((res_pplx[&20]["normalized_score"].as_f64().unwrap() - 0.65).abs() < 1e-4);
+
+        // 3. Test OpenAI /v1/decisions endpoint (gpt-6-luna predicate + {level, probability} array)
+        let cfg_openai = crate::jev_client::ActiveProviderConfig {
+            provider_id: "openai-decisions".to_string(),
+            provider_name: "OpenAI Decisions".to_string(),
+            api_url: format!("http://{}/openai/v1/decisions", addr),
+            portal_url: String::new(),
+            wire_format: "openai_decisions".to_string(),
+            model: "gpt-6-luna".to_string(),
+            requires_key: true,
+        };
+        let res_oai = evaluate_entry_queries_with_provider(
+            &sample_entry,
+            &queries,
+            "sk-openai-test",
+            &cfg_openai,
+        )
+        .await
+        .unwrap();
+        assert!((res_oai[&10]["normalized_score"].as_f64().unwrap() - 0.91).abs() < 1e-4);
+        // Expected idx = 0*0.05 + 1*0.25 + 2*0.70 = 1.65 -> norm = 1.65 / 2 = 0.825
+        assert!((res_oai[&20]["normalized_score"].as_f64().unwrap() - 0.825).abs() < 1e-4);
+    }
+
+    #[tokio::test]
+    async fn test_feed_tags_crud_and_toml_export_import_conflict_resolution() {
+        let base_path = create_temp_dir("toml_roundtrip");
+        let state_src = AppState::new(Some(base_path.join("src_data")), false).unwrap();
+
+        // 1. Create feeds with tags (including comma-separated & duplicate cleanup)
+        let f1 = dispatch_api_request(
+            &state_src,
+            "POST",
+            "/api/feeds",
+            Some(json!({
+                "title": "Nature Neuroscience",
+                "url": "https://www.nature.com/neuro.rss",
+                "category": "Neuroscience",
+                "tags": ["neuroscience", "peer-reviewed", "Neuroscience"],
+                "enabled": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            f1["feed"]["tags"],
+            json!(["neuroscience", "peer-reviewed"])
+        );
+
+        let f2 = dispatch_api_request(
+            &state_src,
+            "POST",
+            "/api/feeds",
+            Some(json!({
+                "title": "arXiv q-bio.NC",
+                "url": "https://rss.arxiv.org/rss/q-bio.NC",
+                "category": "Preprints",
+                "tags": "preprint, computational, theory",
+                "enabled": false
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            f2["feed"]["tags"],
+            json!(["preprint", "computational", "theory"])
+        );
+
+        // Update feed tags via PUT
+        let f1_id = f1["feed"]["id"].as_i64().unwrap();
+        let f1_upd = dispatch_api_request(
+            &state_src,
+            "PUT",
+            &format!("/api/feeds/{}", f1_id),
+            Some(json!({
+                "tags": ["neuroscience", "systems", "peer-reviewed"]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            f1_upd["feed"]["tags"],
+            json!(["neuroscience", "systems", "peer-reviewed"])
+        );
+
+        // Create both noul and score filter rules
+        dispatch_api_request(
+            &state_src,
+            "POST",
+            "/api/queries",
+            Some(json!({
+                "name": "Neuroscience Core",
+                "query_type": "noul",
+                "instructions": "Is this paper about systems or computational neuroscience?",
+                "criteria": {
+                    "true": "Directly investigates neuroscience.",
+                    "false": "Unrelated to neuroscience."
+                },
+                "weight": 2.5,
+                "enabled": true
             })),
         )
         .await
         .unwrap();
 
-        assert_eq!(r_custom["active_provider"]["provider_id"], "custom");
+        dispatch_api_request(
+            &state_src,
+            "POST",
+            "/api/queries",
+            Some(json!({
+                "name": "Modeling Depth",
+                "query_type": "score",
+                "instructions": "Rate the depth of computational modeling.",
+                "criteria": ["None", "Minor statistical tool", "Primary computational model"],
+                "weight": 1.5,
+                "enabled": true
+            })),
+        )
+        .await
+        .unwrap();
+
+        // 2. Export TOML via HTTP API and verify readability
+        let exported = dispatch_api_request(&state_src, "GET", "/api/config/export", None)
+            .await
+            .unwrap();
+        let toml_text = exported["toml"].as_str().unwrap().to_string();
+        assert_eq!(exported["feeds_count"], 2);
+        assert_eq!(exported["rules_count"], 2);
+        assert!(toml_text.contains("[[feeds]]"));
+        assert!(toml_text.contains("[[rules]]"));
+        assert!(toml_text.contains("tags = [\"neuroscience\", \"systems\", \"peer-reviewed\"]"));
+        assert!(toml_text.contains("true_description = "));
+        assert!(toml_text.contains("levels = ["));
+
+        // Also test direct file export endpoint
+        let export_file = base_path.join("exported.toml");
+        let export_file_res = dispatch_api_request(
+            &state_src,
+            "POST",
+            "/api/config/export-file",
+            Some(json!({ "path": export_file.to_string_lossy() })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(export_file_res["exported"], true);
+        assert!(export_file.exists());
+
+        // 3. Import into a fresh DB (zero conflicts)
+        let state_dst = AppState::new(Some(base_path.join("dst_data")), false).unwrap();
+        let preview_fresh = dispatch_api_request(
+            &state_dst,
+            "POST",
+            "/api/config/import/preview",
+            Some(json!({ "toml": toml_text })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview_fresh["has_conflicts"], false);
+        assert_eq!(preview_fresh["new_feeds"].as_array().unwrap().len(), 2);
+        assert_eq!(preview_fresh["new_rules"].as_array().unwrap().len(), 2);
+
+        let applied_fresh = dispatch_api_request(
+            &state_dst,
+            "POST",
+            "/api/config/import/apply",
+            Some(json!({ "toml": toml_text })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied_fresh["feeds_added"], 2);
+        assert_eq!(applied_fresh["rules_added"], 2);
+        assert_eq!(applied_fresh["feeds_overridden"], 0);
+        assert_eq!(applied_fresh["rules_overridden"], 0);
+
+        let dst_feeds = state_dst.db.list_feeds().unwrap();
+        assert_eq!(dst_feeds.len(), 2);
+        let neuro_feed = dst_feeds
+            .iter()
+            .find(|f| f["url"] == "https://www.nature.com/neuro.rss")
+            .unwrap();
         assert_eq!(
-            r_custom["active_provider"]["provider_name"],
-            "My Lab vLLM Cluster"
+            neuro_feed["tags"],
+            json!(["neuroscience", "systems", "peer-reviewed"])
+        );
+
+        // 4. Import modified TOML with conflicts -> selective override (Yes on feed, No on rule)
+        let incoming_toml = r#"
+version = 1
+
+[[feeds]]
+name = "Nature Neuroscience (Updated)"
+url = "https://www.nature.com/neuro.rss"
+category = "Systems Neuroscience"
+tags = ["neuro", "updated"]
+enabled = true
+
+[[feeds]]
+name = "Neuron"
+url = "https://www.cell.com/neuron/current.rss"
+category = "Neuroscience"
+tags = ["cell-press", "neuro"]
+enabled = true
+
+[[rules]]
+name = "Neuroscience Core"
+type = "noul"
+weight = 5.0
+enabled = true
+instructions = "Updated instructions"
+true_description = "Updated true"
+false_description = "Updated false"
+
+[[rules]]
+name = "Avoid Reviews"
+type = "noul"
+weight = -1.5
+enabled = true
+instructions = "Is this paper a review article?"
+"#;
+
+        let preview_conf = dispatch_api_request(
+            &state_dst,
+            "POST",
+            "/api/config/import/preview",
+            Some(json!({ "toml": incoming_toml })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview_conf["has_conflicts"], true);
+        assert_eq!(preview_conf["conflict_count"], 2);
+        assert_eq!(
+            preview_conf["conflicting_feeds"].as_array().unwrap().len(),
+            1
         );
         assert_eq!(
-            r_custom["active_provider"]["base_url"],
-            "https://llm.mylab.org/v1"
+            preview_conf["conflicting_rules"].as_array().unwrap().len(),
+            1
         );
+        assert_eq!(preview_conf["new_feeds"].as_array().unwrap().len(), 1);
+        assert_eq!(preview_conf["new_rules"].as_array().unwrap().len(), 1);
+
+        // Selective apply: override the conflicting feed (Yes), skip the conflicting rule (No)
+        let selective_res = dispatch_api_request(
+            &state_dst,
+            "POST",
+            "/api/config/import/apply",
+            Some(json!({
+                "toml": incoming_toml,
+                "override_all": false,
+                "override_feed_urls": ["https://www.nature.com/neuro.rss"],
+                "override_rule_names": []
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(selective_res["feeds_added"], 1);
+        assert_eq!(selective_res["feeds_overridden"], 1);
+        assert_eq!(selective_res["feeds_skipped"], 0);
+        assert_eq!(selective_res["rules_added"], 1);
+        assert_eq!(selective_res["rules_overridden"], 0);
+        assert_eq!(selective_res["rules_skipped"], 1);
+
+        let neuro_after = state_dst
+            .db
+            .get_feed_by_url("https://www.nature.com/neuro.rss")
+            .unwrap()
+            .unwrap();
+        assert_eq!(neuro_after["title"], "Nature Neuroscience (Updated)");
+        assert_eq!(neuro_after["tags"], json!(["neuro", "updated"]));
+
+        // Rule was skipped -> keeps original weight 2.5
+        let rule_after = state_dst
+            .db
+            .get_query_by_name("Neuroscience Core")
+            .unwrap()
+            .unwrap();
+        assert!((rule_after["weight"].as_f64().unwrap() - 2.5).abs() < 1e-6);
+
+        // 5. Override All
+        let override_all_res = dispatch_api_request(
+            &state_dst,
+            "POST",
+            "/api/config/import/apply",
+            Some(json!({
+                "toml": incoming_toml,
+                "override_all": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(override_all_res["rules_overridden"], 2);
+        let rule_overridden = state_dst
+            .db
+            .get_query_by_name("Neuroscience Core")
+            .unwrap()
+            .unwrap();
+        assert!((rule_overridden["weight"].as_f64().unwrap() - 5.0).abs() < 1e-6);
+
+        let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[tokio::test]
+    async fn test_agent_cli_config_export_import_and_providers() {
+        let base_path = create_temp_dir("cli_config_test");
+        let dir_a = base_path.join("dir_a");
+        let dir_b = base_path.join("dir_b");
+        let toml_file = base_path.join("shared_config.toml");
+
+        // 1. CLI providers set --api-url & --model
+        let prov_args = CliArgs::try_parse_from([
+            "smart-rss",
+            "providers",
+            "set",
+            "--provider",
+            "custom",
+            "--api-url",
+            "https://jev.example.org/api/alpha/decisions",
+            "--model",
+            "typesafe/jev-custom-9",
+        ])
+        .unwrap();
+        let prov_out = execute_cli_resource(prov_args.resource.unwrap(), Some(dir_a.clone()))
+            .await
+            .unwrap();
         assert_eq!(
-            r_custom["active_provider"]["portal_url"],
-            "https://portal.mylab.org/keys"
+            prov_out["active_provider"]["api_url"],
+            "https://jev.example.org/api/alpha/decisions"
         );
-        assert_eq!(r_custom["active_provider"]["model"], "my-custom-llm-v1");
+        assert_eq!(prov_out["active_provider"]["model"], "typesafe/jev-custom-9");
+
+        // 2. CLI feeds add with --tags
+        let add_args = CliArgs::try_parse_from([
+            "smart-rss",
+            "feeds",
+            "add",
+            "--url",
+            "https://www.nature.com/nmeth.rss",
+            "--title",
+            "Nature Methods",
+            "--category",
+            "Methods",
+            "--tags",
+            "methods",
+            "imaging",
+        ])
+        .unwrap();
+        let add_out = execute_cli_resource(add_args.resource.unwrap(), Some(dir_a.clone()))
+            .await
+            .unwrap();
+        assert_eq!(add_out["feed"]["tags"], json!(["methods", "imaging"]));
+
+        // 3. CLI config export --file
+        let exp_args = CliArgs::try_parse_from([
+            "smart-rss",
+            "config",
+            "export",
+            "--file",
+            toml_file.to_str().unwrap(),
+        ])
+        .unwrap();
+        let exp_out = execute_cli_resource(exp_args.resource.unwrap(), Some(dir_a.clone()))
+            .await
+            .unwrap();
+        assert_eq!(exp_out["exported"], true);
+        assert!(toml_file.exists());
+
+        // 4. CLI config import --dry-run into dir_b (seeded defaults cause conflicts with starter feeds/rules)
+        let dry_args = CliArgs::try_parse_from([
+            "smart-rss",
+            "config",
+            "import",
+            "--file",
+            toml_file.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .unwrap();
+        let dry_out = execute_cli_resource(dry_args.resource.unwrap(), Some(dir_b.clone()))
+            .await
+            .unwrap();
+        assert_eq!(dry_out["dry_run"], true);
+        assert_eq!(dry_out["preview"]["has_conflicts"], true);
+
+        // 5. CLI config import --on-conflict skip-existing (adds Nature Methods without overriding starter feeds)
+        let skip_args = CliArgs::try_parse_from([
+            "smart-rss",
+            "config",
+            "import",
+            "--file",
+            toml_file.to_str().unwrap(),
+            "--on-conflict",
+            "skip-existing",
+        ])
+        .unwrap();
+        let skip_out = execute_cli_resource(skip_args.resource.unwrap(), Some(dir_b.clone()))
+            .await
+            .unwrap();
+        assert_eq!(skip_out["applied"], true);
+        assert_eq!(skip_out["summary"]["feeds_added"], 1);
+        assert!(skip_out["summary"]["feeds_skipped"].as_u64().unwrap() >= 4);
+
+        // 6. CLI config import --on-conflict override-all
+        let all_args = CliArgs::try_parse_from([
+            "smart-rss",
+            "config",
+            "import",
+            "--file",
+            toml_file.to_str().unwrap(),
+            "--on-conflict",
+            "override-all",
+        ])
+        .unwrap();
+        let all_out = execute_cli_resource(all_args.resource.unwrap(), Some(dir_b.clone()))
+            .await
+            .unwrap();
+        assert_eq!(all_out["applied"], true);
+        assert!(all_out["summary"]["feeds_overridden"].as_u64().unwrap() >= 5);
 
         let _ = std::fs::remove_dir_all(&base_path);
     }

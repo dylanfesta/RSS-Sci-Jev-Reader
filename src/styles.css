@@ -944,6 +944,12 @@ details:not([open])::details-content {
   border: 1px solid var(--border-strong);
 }
 
+.verdict-pill.score {
+  background: var(--badge-score-bg);
+  color: var(--badge-score-text);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
 .hist-tag {
   font-size: 0.68rem;
   padding: 0.05rem 0.4rem;
@@ -970,12 +976,40 @@ details:not([open])::details-content {
   color: var(--danger);
 }
 
-.entry-abstract-details summary {
+.entry-footer-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+}
+
+.entry-abstract-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
   font-size: 0.82rem;
   color: var(--primary);
   cursor: pointer;
   user-select: none;
   font-weight: 500;
+}
+
+.entry-abstract-toggle:hover {
+  color: var(--primary-hover);
+  text-decoration: underline;
+}
+
+.entry-paper-link {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.entry-paper-link:hover {
+  color: var(--primary-hover);
+  text-decoration: underline;
 }
 
 .entry-abstract-text {
@@ -1220,6 +1254,10 @@ dialog:modal {
   overscroll-behavior: contain;
 }
 
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
 .modal-dialog {
   background: var(--surface);
   color: var(--text);
@@ -1228,6 +1266,10 @@ dialog:modal {
   padding: 0;
   width: min(460px, 92vw);
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.45);
+}
+
+.modal-dialog.modal-dialog-lg {
+  width: min(680px, 94vw);
 }
 
 .modal-dialog::backdrop {
@@ -1820,4 +1862,212 @@ textarea[aria-invalid="true"]:focus-visible {
 
 .hidden {
   display: none !important;
+}
+
+/* Header button groups & 4-column feed form */
+.header-action-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.form-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.settings-side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.label-with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.label-with-action label {
+  margin-bottom: 0;
+}
+
+/* Jev Provider Radio Preset Selector */
+.provider-radio-fieldset {
+  border: none;
+  margin: 0 0 1rem 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.provider-radio-legend {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.45rem;
+  padding: 0;
+}
+
+.provider-radio-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.35rem;
+}
+
+.provider-radio-group.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.provider-radio-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.provider-radio-option:has(input:checked) {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.provider-radio-option input[type="radio"] {
+  accent-color: var(--primary);
+  margin-top: 0.2rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.provider-radio-option label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  margin: 0;
+  flex: 1;
+}
+
+.provider-radio-option label .muted-label {
+  font-size: 0.74rem;
+}
+
+/* Feed Tag Pills */
+.feed-tags-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
+/* TOML Export Preview & Import Conflict Dialog */
+.toml-preview-pre {
+  max-block-size: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.toml-preview-pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+
+.conflict-header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.conflict-item-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--surface-alt);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.85rem;
+  font-size: 0.92rem;
+}
+
+.conflict-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.conflict-compare-card {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem;
+  font-size: 0.82rem;
+}
+
+.conflict-compare-card.incoming {
+  border-color: var(--primary-border);
+  background: var(--primary-soft);
+}
+
+.conflict-compare-label {
+  font-size: 0.73rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 0.45rem;
+}
+
+.conflict-compare-card.incoming .conflict-compare-label {
+  color: var(--primary);
+}
+
+.conflict-compare-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  word-break: break-word;
+}
+
+.conflict-question {
+  margin: 0 0 0.85rem 0;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }

@@ -46,15 +46,16 @@ Because these alpha binaries are not code-signed with paid Apple/Microsoft devel
 
 ## Key Features
 
-- **Expandable RSS Feeds List + Live Test/Preview**:
-  - Inspect, edit, enable/disable, and live-preview entries from any scientific journal RSS/Atom/RDF feed.
+- **Expandable RSS Feeds List + Tags + Live Test/Preview**:
+  - Organize scientific journal RSS/Atom/RDF feeds with categories and custom tags, edit them inline, and live-preview entries before saving.
+- **Human-Readable TOML Config Export & Import**:
+  - Back up, share, or migrate your entire RSS feed list (including categories & tags) and Jev filter rules via clean `.toml` files—with interactive conflict resolution (Override Yes/No, Override All, Skip, or Cancel) in both the desktop UI and Agent CLI (`./smart-rss config export|import`).
 - **Expandable Jev Queries (Yes/No & `score`) + Positive/Negative Weights**:
-  - Configure binary (`noul`) and multi-level rubric (`score`) queries with positive boosts or negative penalties. Outputs are normalized to `[0.0, 1.0]`, and changing weights immediately recalculates paper rankings offline.
+  - Configure binary (`noul`) and multi-level rubric (`score`) queries with positive boosts or negative penalties. Outputs are normalized to `[0.0, 1.0]`, and changing weights immediately recalculates paper rankings offline while preserving historical query snapshots on already-scored papers.
 - **Interactive Individual Jev Query Tester**:
   - Pick an RSS feed, pick an entry from that feed, choose a Jev query, and inspect the live Jev probability distribution and weighted score with one click.
-- **29+ AI Providers (OpenCode Catalog + NanoGPT + Local + Custom Provider Link)**:
-  - Tested exclusively on **OpenRouter, TypeSafe Jev** (`/api/alpha/decisions`) plus structured JSON probability evaluation.
-  - Further providers included but untested.
+- **Native Decision-Model Providers (`systemone` & `openai_decisions` Wire Protocols)**:
+  - Dedicated support for true structured decision models (zero chat-completion prose workarounds)—including **OpenRouter** (`typesafe/jev-1.14`, `cloudflare/clef`, `perplexity/pplx-decider`), **NanoGPT**, **OfoxAI**, **TypeSafe AI**, **Perplexity Decisions**, **OpenAI Decisions**, and custom/local endpoints with directly editable API URLs and model names.
 - **Password-Encrypted Multi-Provider API Keys (`AES-256-GCM` + `PBKDF2-HMAC-SHA256`)**:
   - Encrypted at rest in `secrets.enc` (600,000 PBKDF2 iterations, binary-compatible with the Python version) and unlocked into RAM with your password when using the app, storing separate keys per provider under your master password.
 - **Incremental Memory (New Entries Only) & 1-Month Archive Retention**:

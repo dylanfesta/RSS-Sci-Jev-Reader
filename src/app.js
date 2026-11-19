@@ -20,12 +20,17 @@ const state = {
   },
   settings: {
     ai_provider: "openrouter",
+    provider_api_url: "https://openrouter.ai/api/alpha/decisions",
+    provider_wire_format: "systemone",
     jev_model: "typesafe/jev-1.14",
     max_entries_per_feed: "25",
     custom_provider_name: "",
     custom_base_url: "",
     custom_portal_url: "",
   },
+  exportTomlText: "",
+  exportSuggestedFilename: "smart_rss_config.toml",
+  importFlow: null,
   providers: [],
   activeProvider: null,
   workspace: {
@@ -360,19 +365,55 @@ function initAiInfoFrame() {
 
 // --- Auth / Password Encryption Modal ---
 
+function getSelectedRadioValue(name, fallback = "openrouter") {
+  const checked = document.querySelector(`input[name="${name}"]:checked`);
+  return checked ? checked.value : fallback;
+}
+
+function setSelectedRadioValue(name, value) {
+  const radios = document.querySelectorAll(`input[name="${name}"]`);
+  let matched = false;
+  radios.forEach((r) => {
+    const isMatch = r.value === value;
+    r.checked = isMatch;
+    if (isMatch) matched = true;
+  });
+  if (!matched && radios.length > 0) {
+    radios[0].checked = true;
+  }
+}
+
+function parseTagsInput(raw) {
+  const seen = new Set();
+  const out = [];
+  for (const part of String(raw || "").split(",")) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const lower = clean.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
+function formatTagsInput(tags) {
+  return Array.isArray(tags) ? tags.join(", ") : "";
+}
+
 function findProviderSpec(providerId) {
   return (
     state.providers.find((p) => p.id === providerId) ||
     state.providers[0] || {
       id: "openrouter",
-      name: "OpenRouter",
-      category: "Featured & Aggregators",
-      base_url: "https://openrouter.ai/api/v1",
+      name: "OpenRouter (TypeSafe Jev)",
+      api_url: "https://openrouter.ai/api/alpha/decisions",
       portal_url: "https://openrouter.ai/keys",
       default_model: "typesafe/jev-1.14",
-      suggested_models: ["typesafe/jev-1.14"],
+      recommended_models: ["typesafe/jev-1.14", "typesafe/jev-1.13", "typesafe/jev-router"],
       requires_key: true,
-      description: "OpenRouter AI Gateway",
+      description: "Official OpenRouter Decisions API for TypeSafe Jev models.",
     }
   );
 }
@@ -381,7 +422,6 @@ function getResolvedPortalUrl(providerId) {
   if (providerId === "custom") {
     return (
       state.settings.custom_portal_url ||
-      state.settings.custom_base_url ||
       (state.auth && state.auth.portal_url) ||
       ""
     ).trim();
@@ -392,35 +432,49 @@ function getResolvedPortalUrl(providerId) {
   return (spec.portal_url || "").trim();
 }
 
-function syncSetupModalProvider(providerId) {
+function syncSetupModalProvider(providerId, applyPresetDefaults = false) {
   const spec = findProviderSpec(providerId);
   const selectEl = document.getElementById("setup-provider-select");
   if (selectEl && selectEl.value !== spec.id) {
     selectEl.value = spec.id;
   }
+
   const customBox = document.getElementById("setup-custom-provider-box");
   if (customBox) {
     customBox.classList.toggle("hidden", spec.id !== "custom");
   }
+
+  const apiUrlInp = document.getElementById("setup-provider-api-url");
+  const modelInp = document.getElementById("setup-jev-model");
+  if (applyPresetDefaults) {
+    if (apiUrlInp && spec.id !== "custom") {
+      apiUrlInp.value = spec.api_url;
+    }
+    if (modelInp) {
+      modelInp.value = spec.default_model;
+    }
+    populateModelDatalist(spec.recommended_models || []);
+  }
+
   const keyInput = document.getElementById("setup-apikey-input");
   const keyLabel = document.getElementById("setup-apikey-label-text");
   if (keyInput) {
     keyInput.required = spec.requires_key !== false;
     keyInput.placeholder =
       spec.requires_key === false
-        ? "Optional for local provider (leave blank or enter token)"
+        ? "Optional for local/custom endpoint (leave blank if none)"
         : `Paste your ${spec.name} API key...`;
   }
   if (keyLabel) {
     keyLabel.textContent =
       spec.requires_key === false
-        ? `${spec.name} API Key (Optional for Local Endpoint)`
+        ? `${spec.name} API Key (Optional)`
         : `${spec.name} API Key`;
   }
   const portalBtn = document.getElementById("btn-auth-open-portal");
   if (portalBtn) {
-    const label = spec.id === "custom" ? "Open Provider Link" : `Get ${spec.name} Key`;
-    portalBtn.textContent = `🔗 ${label}`;
+    const label = spec.id === "custom" ? "Open Provider Link" : `Get ${spec.name.split(" (")[0]} Key`;
+    portalBtn.textContent = `🔗 ${label} ↗`;
   }
 }
 
@@ -578,16 +632,29 @@ function openAuthModal(forceSetup = false) {
     document.getElementById("unlock-password-input").value = "";
     unlockForm.classList.remove("hidden");
   } else {
-    document.getElementById("auth-modal-title").textContent = "Configure AI Provider & Encrypt API Key";
+    document.getElementById("auth-modal-title").textContent = "Configure Jev Endpoint, Model & API Key";
     document.getElementById("setup-apikey-input").value = "";
     document.getElementById("setup-password-input").value = "";
+    const apiUrlInp = document.getElementById("setup-provider-api-url");
+    const modelInp = document.getElementById("setup-jev-model");
     const customNameInp = document.getElementById("setup-custom-name");
-    const customBaseInp = document.getElementById("setup-custom-base-url");
     const customPortalInp = document.getElementById("setup-custom-portal-url");
+    const spec = findProviderSpec(activeProvId);
+    if (apiUrlInp) {
+      apiUrlInp.value =
+        (state.activeProvider && state.activeProvider.api_url) ||
+        state.settings.provider_api_url ||
+        spec.api_url;
+    }
+    if (modelInp) {
+      modelInp.value =
+        (state.activeProvider && state.activeProvider.model) ||
+        state.settings.jev_model ||
+        spec.default_model;
+    }
     if (customNameInp) customNameInp.value = state.settings.custom_provider_name || "";
-    if (customBaseInp) customBaseInp.value = state.settings.custom_base_url || "";
     if (customPortalInp) customPortalInp.value = state.settings.custom_portal_url || "";
-    syncSetupModalProvider(activeProvId);
+    syncSetupModalProvider(activeProvId, false);
     backBtn.classList.toggle("hidden", !state.auth.has_saved_key);
     setupForm.classList.remove("hidden");
   }
@@ -666,13 +733,15 @@ function renderEntryCard(entry, isArchived = false) {
             </span>
           `;
         } else {
-          outcomeHtml = `<span class="outcome-detail">${escapeHtml(qs.raw_outcome_text || `${(norm * 100).toFixed(1)}%`)}</span>`;
+          outcomeHtml = `
+            <span class="verdict-pill score">Score:</span>
+            <span class="outcome-detail">${escapeHtml(qs.raw_outcome_text || `${(norm * 100).toFixed(1)}%`)}</span>
+          `;
         }
 
         return `
           <tr class="${!qs.enabled ? "row-disabled" : ""}">
             <td class="col-query-name" title="${escapeGtkLabel(snapInstr)}">
-              <span class="type-badge ${escapeHtml(qs.query_type)}">${qs.query_type === "noul" ? "Yes/No" : "Score"}</span>
               <strong>${escapeHtml(qs.query_name)}</strong>
               ${histBadge}
             </td>
@@ -735,12 +804,25 @@ function renderEntryCard(entry, isArchived = false) {
         ${breakdownHtml}
 
         ${
-          entry.summary
+          entry.summary || entry.link
             ? `
-          <details class="entry-abstract-details">
-            <summary>Show Abstract / Summary</summary>
-            <div class="entry-abstract-text">${escapeHtml(entry.summary)}</div>
-          </details>
+          <div class="entry-footer-bar">
+            ${
+              entry.summary
+                ? `<button type="button" class="entry-abstract-toggle" aria-expanded="false">▸ Show Abstract / Summary</button>`
+                : ""
+            }
+            ${
+              entry.link
+                ? `<a href="${escapeHtml(entry.link)}" class="external-article-link entry-paper-link" target="_blank" rel="noopener noreferrer" title="${escapeHtml(entry.link)}">Open Paper ↗</a>`
+                : ""
+            }
+          </div>
+          ${
+            entry.summary
+              ? `<div class="entry-abstract-text hidden">${escapeHtml(entry.summary)}</div>`
+              : ""
+          }
         `
             : ""
         }
@@ -875,7 +957,8 @@ function renderJournalFilterOptions(scope) {
     ? state.feeds.filter(
         (f) =>
           String(f.title || "").toLowerCase().includes(q) ||
-          String(f.category || "").toLowerCase().includes(q)
+          String(f.category || "").toLowerCase().includes(q) ||
+          (Array.isArray(f.tags) && f.tags.some((t) => String(t).toLowerCase().includes(q)))
       )
     : state.feeds;
 
@@ -1207,8 +1290,15 @@ function renderFeedsList() {
   }
 
   container.innerHTML = state.feeds
-    .map(
-      (f) => `
+    .map((f) => {
+      const tagsArr = Array.isArray(f.tags) ? f.tags : [];
+      const tagsHtml =
+        tagsArr.length > 0
+          ? `<span class="feed-tags-wrap">${tagsArr
+              .map((t) => `<span class="tag-pill">#${escapeHtml(t)}</span>`)
+              .join("")}</span>`
+          : "";
+      return `
       <details class="expandable-item" data-feed-id="${f.id}">
         <summary>
           <div class="summary-left">
@@ -1222,6 +1312,7 @@ function renderFeedsList() {
             />
             <strong>${escapeHtml(f.title)}</strong>
             <span class="journal-pill">${escapeHtml(f.category || "General")}</span>
+            ${tagsHtml}
             <code>${escapeHtml(f.url)}</code>
           </div>
           <div class="summary-right">
@@ -1236,18 +1327,22 @@ function renderFeedsList() {
 
         <div class="expandable-body">
           <form class="edit-feed-form" data-id="${f.id}">
-            <div class="form-grid-3">
+            <div class="form-grid-4">
               <div class="field">
                 <label>Journal / Feed Title</label>
                 <input type="text" name="title" class="input" value="${escapeHtml(f.title)}" required />
               </div>
               <div class="field">
                 <label>RSS / Atom URL</label>
-                <input type="url" name="url" class="input" value="${escapeHtml(f.url)}" required />
+                <input type="url" name="url" class="input" value="${escapeHtml(f.url)}" autocorrect="off" autocapitalize="none" spellcheck="false" required />
               </div>
               <div class="field">
                 <label>Category</label>
                 <input type="text" name="category" class="input" value="${escapeHtml(f.category || "General")}" />
+              </div>
+              <div class="field">
+                <label>Tags (comma-separated)</label>
+                <input type="text" name="tags" class="input" value="${escapeHtml(formatTagsInput(tagsArr))}" placeholder="e.g. preprint, computational" autocorrect="off" autocapitalize="none" spellcheck="false" />
               </div>
             </div>
             <div class="split-header-sm">
@@ -1267,8 +1362,8 @@ function renderFeedsList() {
           <div id="feed-preview-box-${f.id}" class="feed-preview-box hidden"></div>
         </div>
       </details>
-    `
-    )
+    `;
+    })
     .join("");
 }
 
@@ -1299,17 +1394,23 @@ function populateTesterQueriesDropdown() {
   if (prevVal) sel.value = prevVal;
 }
 
-function renderScoreLevelsInputs(levels = ["Low relevance", "Moderate relevance", "High relevance"]) {
+function renderScoreLevelsInputs(
+  levels = ["Low relevance", "Moderate relevance", "High relevance"],
+  { asPlaceholders = false, required = true } = {}
+) {
   return levels
-    .map(
-      (lvl, idx) => `
+    .map((lvl, idx) => {
+      const valAttr = asPlaceholders ? "" : `value="${escapeHtml(lvl)}"`;
+      const placeholderText = asPlaceholders ? lvl : `Describe level ${idx + 1}...`;
+      const reqAttr = required ? "required" : "";
+      return `
       <div class="level-row">
         <span class="level-index">Level ${idx + 1}</span>
-        <input type="text" class="input score-level-input" value="${escapeHtml(lvl)}" placeholder="Describe level ${idx + 1}..." required />
+        <input type="text" class="input score-level-input" ${valAttr} placeholder="${escapeHtml(placeholderText)}" ${reqAttr} />
         <button type="button" class="btn btn-xs btn-ghost btn-remove-level" title="Remove level">✕</button>
       </div>
-    `
-    )
+    `;
+    })
     .join("");
 }
 
@@ -1330,10 +1431,10 @@ function renderQueriesList() {
       const isScore = q.query_type === "score";
       const trueDesc = !isScore && q.criteria ? q.criteria.true || "" : "";
       const falseDesc = !isScore && q.criteria ? q.criteria.false || "" : "";
-      const scoreLevels =
-        isScore && Array.isArray(q.criteria) && q.criteria.length >= 2
-          ? q.criteria
-          : ["Not relevant", "Moderately relevant", "Highly relevant"];
+      const hasSavedScoreLevels = isScore && Array.isArray(q.criteria) && q.criteria.length >= 2;
+      const scoreLevels = hasSavedScoreLevels
+        ? q.criteria
+        : ["e.g. Not relevant", "e.g. Moderately relevant", "e.g. Highly relevant"];
 
       return `
         <details class="expandable-item" data-query-id="${q.id}">
@@ -1415,7 +1516,7 @@ function renderQueriesList() {
                   <button type="button" class="btn btn-xs btn-secondary btn-add-edit-level">+ Add Level</button>
                 </div>
                 <div class="levels-list edit-levels-container">
-                  ${renderScoreLevelsInputs(scoreLevels)}
+                  ${renderScoreLevelsInputs(scoreLevels, { asPlaceholders: !hasSavedScoreLevels, required: isScore })}
                 </div>
               </div>
 
@@ -1526,6 +1627,10 @@ function renderTesterResult(res) {
       <span class="badge">${escapeHtml(res.display_value)}</span>
     </div>
     <div class="muted-label" style="margin-bottom:0.5rem">
+      Model: <code>${escapeHtml(res.model || state.settings.jev_model || "")}</code>
+      ${res.api_url ? ` · Endpoint: <code>${escapeHtml(res.api_url)}</code>` : ""}
+    </div>
+    <div class="muted-label" style="margin-bottom:0.5rem">
       Normalized Score: <strong>${Number(res.normalized_score).toFixed(4)} (${normPct}%)</strong> ·
       Weight: <code>${res.weight}</code> ·
       Weighted Contribution: <strong>${Number(res.weighted_contribution).toFixed(4)}</strong>
@@ -1589,7 +1694,7 @@ async function runSingleJevTest() {
   }
 }
 
-// --- Settings & Multi-Provider Configuration ---
+// --- Settings & Multi-Provider Decision Configuration ---
 
 function populateProviderSelects() {
   const providers = state.providers || [];
@@ -1597,7 +1702,7 @@ function populateProviderSelects() {
 
   const groups = new Map();
   for (const p of providers) {
-    const cat = p.group || p.category || "Providers";
+    const cat = p.group || "Decision Providers";
     if (!groups.has(cat)) groups.set(cat, []);
     groups.get(cat).push(p);
   }
@@ -1625,34 +1730,42 @@ function populateModelDatalist(models = []) {
     .join("");
 }
 
-function updateSettingsProviderPreview(providerId, applyDefaultModel = false) {
+function updateSettingsProviderPreview(providerId, applyPresetDefaults = false) {
   const spec = findProviderSpec(providerId);
   const descEl = document.getElementById("setting-provider-desc");
   const portalUrlEl = document.getElementById("setting-portal-url-display");
-  const customDetails = document.getElementById("setting-custom-provider-details");
+  const customMetaBox = document.getElementById("setting-custom-meta-box");
+  const apiUrlInp = document.getElementById("setting-provider-api-url");
   const modelInp = document.getElementById("setting-jev-model");
 
+  if (applyPresetDefaults) {
+    if (apiUrlInp && spec.id !== "custom") {
+      apiUrlInp.value = spec.api_url;
+    }
+    if (modelInp) {
+      modelInp.value = spec.default_model;
+    }
+    setSelectedRadioValue("provider_wire_format", spec.wire_format || "systemone");
+  }
+
   const customName = (document.getElementById("setting-custom-provider-name")?.value || "").trim();
-  const customBase = (document.getElementById("setting-custom-base-url")?.value || "").trim();
   const customPortal = (document.getElementById("setting-custom-portal-url")?.value || "").trim();
+  const activeUrl = (apiUrlInp?.value || spec.api_url || "").trim();
 
   if (descEl) {
-    const baseDisplay = customBase || spec.base_url || "(configure Custom API Base URL below)";
-    descEl.textContent = `${spec.description} • Endpoint: ${baseDisplay}`;
+    descEl.textContent = `${spec.description} Active URL: ${activeUrl}`;
   }
   if (portalUrlEl) {
-    const link = customPortal || spec.portal_url || customBase || "(set General Link below)";
+    const link = customPortal || spec.portal_url || "(local / optional — set below)";
     const label = spec.id === "custom" && customName ? `${customName}: ${link}` : link;
     portalUrlEl.textContent = label;
   }
-  if (customDetails && (spec.id === "custom" || customBase || customPortal || customName)) {
-    if (spec.id === "custom") customDetails.open = true;
+  if (customMetaBox) {
+    const isCustomLike = spec.id === "custom" || spec.id === "litellm" || spec.id === "local-decider";
+    customMetaBox.classList.toggle("hidden", !isCustomLike);
   }
 
-  populateModelDatalist(spec.recommended_models || spec.suggested_models || []);
-  if (applyDefaultModel && modelInp && spec.default_model) {
-    modelInp.value = spec.default_model;
-  }
+  populateModelDatalist(spec.recommended_models || ["typesafe/jev-1.14"]);
 }
 
 async function loadSettings() {
@@ -1672,23 +1785,267 @@ async function loadSettings() {
       "info"
     );
   }
-  const provId = state.settings.ai_provider || "openrouter";
+  const provId =
+    (data.active_provider && data.active_provider.provider_id) ||
+    state.settings.ai_provider ||
+    "openrouter";
+  const spec = findProviderSpec(provId);
   const settingSelect = document.getElementById("setting-ai-provider");
-  if (settingSelect) settingSelect.value = provId;
+  if (settingSelect) settingSelect.value = spec.id;
 
+  const wireFormat =
+    (data.active_provider && data.active_provider.wire_format) ||
+    state.settings.provider_wire_format ||
+    spec.wire_format ||
+    "systemone";
+  setSelectedRadioValue("provider_wire_format", wireFormat);
+
+  const apiUrlEl = document.getElementById("setting-provider-api-url");
+  const modelEl = document.getElementById("setting-jev-model");
   const customNameEl = document.getElementById("setting-custom-provider-name");
-  const customBaseEl = document.getElementById("setting-custom-base-url");
   const customPortalEl = document.getElementById("setting-custom-portal-url");
+
+  if (apiUrlEl) {
+    apiUrlEl.value =
+      (data.active_provider && data.active_provider.api_url) ||
+      state.settings.provider_api_url ||
+      spec.api_url;
+  }
+  if (modelEl) {
+    modelEl.value =
+      (data.active_provider && data.active_provider.model) ||
+      state.settings.jev_model ||
+      spec.default_model;
+  }
   if (customNameEl) customNameEl.value = state.settings.custom_provider_name || "";
-  if (customBaseEl) customBaseEl.value = state.settings.custom_base_url || "";
   if (customPortalEl) customPortalEl.value = state.settings.custom_portal_url || "";
 
-  document.getElementById("setting-jev-model").value =
-    state.settings.jev_model || findProviderSpec(provId).default_model || "typesafe/jev-1.14";
   document.getElementById("setting-max-entries").value =
     state.settings.max_entries_per_feed || "25";
 
-  updateSettingsProviderPreview(provId, false);
+  updateSettingsProviderPreview(spec.id, false);
+}
+
+// --- TOML Export & Import with Interactive Conflict Resolution ---
+
+async function openExportTomlDialog() {
+  const dialog = document.getElementById("export-toml-dialog");
+  if (!dialog) return;
+  try {
+    const data = await apiFetch("/api/config/export");
+    state.exportTomlText = data.toml || "";
+    state.exportSuggestedFilename = data.suggested_filename || "smart_rss_config.toml";
+
+    const summaryEl = document.getElementById("export-toml-summary");
+    if (summaryEl) {
+      summaryEl.textContent = `Prepared ${data.feeds_count} RSS feed(s) (with categories & tags) and ${data.rules_count} Jev filter rule(s). API keys are never included.`;
+    }
+    const pathInp = document.getElementById("export-toml-path-input");
+    if (pathInp) {
+      pathInp.value = data.default_export_path || `${state.workspace.data_dir}/smart_rss_config.toml`;
+    }
+    const codeEl = document.getElementById("export-toml-preview-code");
+    if (codeEl) {
+      codeEl.textContent = state.exportTomlText;
+    }
+
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+  } catch (err) {
+    showToast(err.message || "Failed to generate TOML export.", "error");
+  }
+}
+
+async function downloadExportTomlViaBrowser() {
+  const text = state.exportTomlText || "";
+  const filename = state.exportSuggestedFilename || "smart_rss_config.toml";
+  if (!text) return;
+
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [
+          {
+            description: "TOML Configuration File",
+            accept: { "application/toml": [".toml"], "text/plain": [".toml"] },
+          },
+        ],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      showToast(`Saved ${filename}!`, "success");
+      return;
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+    }
+  }
+
+  const blob = new Blob([text], { type: "application/toml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(`Triggered download of ${filename}. (If your desktop webview blocks downloads, use "Save to File" above.)`, "info");
+}
+
+function renderFeedComparisonHtml(feedObj, isIncoming) {
+  const title = isIncoming ? feedObj.name : feedObj.title;
+  const tags = Array.isArray(feedObj.tags) ? feedObj.tags : [];
+  const tagsText = tags.length > 0 ? tags.map((t) => `#${t}`).join(", ") : "(none)";
+  const enabledText = feedObj.enabled ? "Enabled" : "Disabled";
+  return `
+    <div><strong>Name:</strong> ${escapeHtml(title || "")}</div>
+    <div><strong>URL:</strong> <code>${escapeHtml(feedObj.url || "")}</code></div>
+    <div><strong>Category:</strong> ${escapeHtml(feedObj.category || "General")}</div>
+    <div><strong>Tags:</strong> ${escapeHtml(tagsText)}</div>
+    <div><strong>Status:</strong> ${escapeHtml(enabledText)}</div>
+  `;
+}
+
+function renderRuleComparisonHtml(ruleObj) {
+  const qtype = ruleObj.query_type || "noul";
+  const weight = Number(ruleObj.weight ?? 1.0);
+  const enabledText = ruleObj.enabled ? "Enabled" : "Disabled";
+  let critHtml = "";
+  if (qtype === "score") {
+    const lvls = Array.isArray(ruleObj.levels)
+      ? ruleObj.levels
+      : Array.isArray(ruleObj.criteria)
+        ? ruleObj.criteria
+        : [];
+    critHtml = `<div><strong>Levels (${lvls.length}):</strong> ${escapeHtml(lvls.join(" → "))}</div>`;
+  } else {
+    const t = ruleObj.true_description || (ruleObj.criteria && ruleObj.criteria.true) || "";
+    const f = ruleObj.false_description || (ruleObj.criteria && ruleObj.criteria.false) || "";
+    if (t) critHtml += `<div><strong>True:</strong> ${escapeHtml(t)}</div>`;
+    if (f) critHtml += `<div><strong>False:</strong> ${escapeHtml(f)}</div>`;
+  }
+  return `
+    <div><strong>Type:</strong> ${qtype === "noul" ? "Yes/No (noul)" : "Rubric (score)"}</div>
+    <div><strong>Weight:</strong> <code>${weight > 0 ? "+" : ""}${weight}</code> · <strong>${escapeHtml(enabledText)}</strong></div>
+    <div><strong>Instructions:</strong> ${escapeHtml(ruleObj.instructions || "")}</div>
+    ${critHtml}
+  `;
+}
+
+function renderCurrentImportConflict() {
+  const flow = state.importFlow;
+  if (!flow || flow.index >= flow.conflicts.length) return;
+
+  const item = flow.conflicts[flow.index];
+  const total = flow.conflicts.length;
+
+  document.getElementById("conflict-progress-badge").textContent = `Conflict ${flow.index + 1} of ${total}`;
+  document.getElementById("conflict-overview-text").textContent =
+    `TOML contains ${flow.preview.new_feeds.length} new feed(s), ${flow.preview.new_rules.length} new filter rule(s), and ${total} existing item(s) that already exist in SmartRSSReader.`;
+
+  const typeBadge = document.getElementById("conflict-item-type-badge");
+  const nameEl = document.getElementById("conflict-item-name");
+  const existingEl = document.getElementById("conflict-existing-details");
+  const incomingEl = document.getElementById("conflict-incoming-details");
+
+  if (item.kind === "feed") {
+    typeBadge.className = "type-badge noul";
+    typeBadge.textContent = "RSS Feed";
+    nameEl.textContent = `${item.incoming.name} (${item.incoming.url})`;
+    existingEl.innerHTML = renderFeedComparisonHtml(item.existing, false);
+    incomingEl.innerHTML = renderFeedComparisonHtml(item.incoming, true);
+  } else {
+    typeBadge.className = "type-badge score";
+    typeBadge.textContent = "Filter Rule";
+    nameEl.textContent = item.incoming.name;
+    existingEl.innerHTML = renderRuleComparisonHtml(item.existing);
+    incomingEl.innerHTML = renderRuleComparisonHtml(item.incoming);
+  }
+
+  const noBtn = document.getElementById("btn-conflict-no");
+  if (noBtn) noBtn.focus();
+}
+
+async function finishTomlImportFlow(overrideAll = false) {
+  const flow = state.importFlow;
+  if (!flow) return;
+  const dialog = document.getElementById("import-conflict-dialog");
+  state.importFlow = null;
+  if (dialog && dialog.open) {
+    dialog.close("applied");
+  }
+
+  try {
+    const res = await apiFetch("/api/config/import/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        toml: flow.tomlText,
+        override_all: overrideAll,
+        override_feed_urls: Array.from(flow.overrideFeedUrls),
+        override_rule_names: Array.from(flow.overrideRuleNames),
+      }),
+    });
+    updateCountsUI(res.counts);
+    await Promise.all([loadFeeds(), loadQueries(), loadActiveEntries(), loadSettings()]);
+    showToast(
+      `TOML imported: +${res.feeds_added} feeds (${res.feeds_overridden} overridden, ${res.feeds_skipped} kept) · +${res.rules_added} rules (${res.rules_overridden} overridden, ${res.rules_skipped} kept).`,
+      "success"
+    );
+  } catch (err) {
+    showToast(err.message || "Failed to apply TOML import.", "error");
+  }
+}
+
+function cancelTomlImportFlow(silent = false) {
+  const dialog = document.getElementById("import-conflict-dialog");
+  const wasActive = Boolean(state.importFlow);
+  state.importFlow = null;
+  if (dialog && dialog.open) {
+    dialog.close("cancelled");
+  }
+  if (wasActive && !silent) {
+    showToast("TOML import cancelled — no changes were made.", "info");
+  }
+}
+
+async function startTomlImportFlow(tomlText) {
+  try {
+    const preview = await apiFetch("/api/config/import/preview", {
+      method: "POST",
+      body: JSON.stringify({ toml: tomlText }),
+    });
+
+    const conflicts = [
+      ...(preview.conflicting_feeds || []).map((c) => ({ kind: "feed", ...c })),
+      ...(preview.conflicting_rules || []).map((c) => ({ kind: "rule", ...c })),
+    ];
+
+    state.importFlow = {
+      tomlText,
+      preview,
+      conflicts,
+      index: 0,
+      overrideFeedUrls: new Set(),
+      overrideRuleNames: new Set(),
+    };
+
+    if (conflicts.length === 0) {
+      await finishTomlImportFlow(false);
+      return;
+    }
+
+    renderCurrentImportConflict();
+    const dialog = document.getElementById("import-conflict-dialog");
+    if (dialog && !dialog.open) {
+      dialog.showModal();
+    }
+  } catch (err) {
+    state.importFlow = null;
+    showToast(err.message || "Invalid TOML file.", "error");
+  }
 }
 
 // --- Theme Toggle ---
@@ -1755,6 +2112,19 @@ function initEventListeners() {
 
   // Prevent summary toggle when clicking inline checkboxes/inputs inside <summary>
   document.body.addEventListener("click", (e) => {
+    const abstractToggle = e.target.closest(".entry-abstract-toggle");
+    if (abstractToggle) {
+      const card = abstractToggle.closest(".entry-main");
+      const textEl = card && card.querySelector(".entry-abstract-text");
+      if (textEl) {
+        const isNowOpen = textEl.classList.toggle("hidden") === false;
+        abstractToggle.setAttribute("aria-expanded", isNowOpen ? "true" : "false");
+        abstractToggle.textContent = isNowOpen
+          ? "▾ Hide Abstract / Summary"
+          : "▸ Show Abstract / Summary";
+      }
+      return;
+    }
     if (e.target.closest(".stop-summary-toggle")) {
       e.stopPropagation();
     }
@@ -1786,29 +2156,153 @@ function initEventListeners() {
     });
   });
 
-  // Auth modal controls
+  // Auth & generic modal controls
   initBriefPasswordPeek(1500);
   const authDialog = document.getElementById("auth-dialog");
   if (authDialog) {
     authDialog.addEventListener("close", () => {
       maskAllPeekPasswords();
+      authDialog.returnValue = "";
     });
   }
-  if (authDialog && !("closedBy" in HTMLDialogElement.prototype)) {
+  const exportDialog = document.getElementById("export-toml-dialog");
+  if (exportDialog) {
+    exportDialog.addEventListener("close", () => {
+      exportDialog.returnValue = "";
+    });
+  }
+  const conflictDialog = document.getElementById("import-conflict-dialog");
+  if (conflictDialog) {
+    conflictDialog.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      cancelTomlImportFlow(false);
+    });
+    conflictDialog.addEventListener("close", () => {
+      conflictDialog.returnValue = "";
+    });
+  }
+
+  if (!("closedBy" in HTMLDialogElement.prototype)) {
     const isOutsideDialog = (e, dlg) => {
       const r = dlg.getBoundingClientRect();
       return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
     };
-    let pressedOutside = false;
-    authDialog.addEventListener("pointerdown", (e) => {
-      pressedOutside = isOutsideDialog(e, authDialog);
+    document.querySelectorAll('dialog[closedby="any"]').forEach((dlg) => {
+      let pressedOutside = false;
+      dlg.addEventListener("pointerdown", (e) => {
+        pressedOutside = isOutsideDialog(e, dlg);
+      });
+      dlg.addEventListener("pointerup", (e) => {
+        if (pressedOutside && isOutsideDialog(e, dlg)) {
+          dlg.close();
+        }
+      });
     });
-    authDialog.addEventListener("pointerup", (e) => {
-      if (pressedOutside && isOutsideDialog(e, authDialog)) {
-        authDialog.close();
+  }
+
+  // TOML Export & Import Triggers + Dialog Controls
+  document.querySelectorAll(".btn-export-toml").forEach((btn) => {
+    btn.addEventListener("click", openExportTomlDialog);
+  });
+
+  const tomlFileInput = document.getElementById("toml-import-file-input");
+  document.querySelectorAll(".btn-import-toml").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (tomlFileInput) {
+        tomlFileInput.value = "";
+        tomlFileInput.click();
+      }
+    });
+  });
+
+  if (tomlFileInput) {
+    tomlFileInput.addEventListener("change", async () => {
+      const file = tomlFileInput.files && tomlFileInput.files[0];
+      tomlFileInput.value = "";
+      if (!file) return;
+      try {
+        const text = await file.text();
+        await startTomlImportFlow(text);
+      } catch (err) {
+        showToast(err.message || "Could not read selected TOML file.", "error");
       }
     });
   }
+
+  document.getElementById("btn-close-export-dialog")?.addEventListener("click", () => {
+    document.getElementById("export-toml-dialog")?.close();
+  });
+
+  document.getElementById("export-toml-path-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const pathInp = document.getElementById("export-toml-path-input");
+    const targetPath = (pathInp ? pathInp.value : "").trim();
+    if (!targetPath) return;
+    try {
+      const res = await apiFetch("/api/config/export-file", {
+        method: "POST",
+        body: JSON.stringify({ path: targetPath }),
+      });
+      showToast(
+        `Exported ${res.feeds_count} feed(s) & ${res.rules_count} rule(s) to ${res.path}`,
+        "success"
+      );
+      document.getElementById("export-toml-dialog")?.close();
+    } catch (err) {
+      showToast(err.message || "Failed to save TOML file.", "error");
+    }
+  });
+
+  document.getElementById("btn-download-toml-blob")?.addEventListener("click", downloadExportTomlViaBrowser);
+
+  document.getElementById("btn-copy-toml-text")?.addEventListener("click", async () => {
+    if (!state.exportTomlText) return;
+    try {
+      await navigator.clipboard.writeText(state.exportTomlText);
+      showToast("Copied TOML configuration to clipboard!", "success");
+    } catch (_err) {
+      showToast("Could not access clipboard; you can select text in the preview below.", "info");
+    }
+  });
+
+  document.getElementById("btn-conflict-yes")?.addEventListener("click", async () => {
+    const flow = state.importFlow;
+    if (!flow) return;
+    const current = flow.conflicts[flow.index];
+    if (current) {
+      if (current.kind === "feed") flow.overrideFeedUrls.add(current.key);
+      else flow.overrideRuleNames.add(current.key);
+    }
+    flow.index += 1;
+    if (flow.index >= flow.conflicts.length) {
+      await finishTomlImportFlow(false);
+    } else {
+      renderCurrentImportConflict();
+    }
+  });
+
+  document.getElementById("btn-conflict-no")?.addEventListener("click", async () => {
+    const flow = state.importFlow;
+    if (!flow) return;
+    flow.index += 1;
+    if (flow.index >= flow.conflicts.length) {
+      await finishTomlImportFlow(false);
+    } else {
+      renderCurrentImportConflict();
+    }
+  });
+
+  document.getElementById("btn-conflict-override-all")?.addEventListener("click", async () => {
+    await finishTomlImportFlow(true);
+  });
+
+  document.getElementById("btn-conflict-cancel")?.addEventListener("click", () => {
+    cancelTomlImportFlow(false);
+  });
+
+  document.getElementById("btn-close-conflict-dialog")?.addEventListener("click", () => {
+    cancelTomlImportFlow(false);
+  });
 
   document.getElementById("btn-open-auth").addEventListener("click", () => openAuthModal(false));
   document.getElementById("btn-close-auth").addEventListener("click", () => {
@@ -1855,7 +2349,7 @@ function initEventListeners() {
   const setupProvSelect = document.getElementById("setup-provider-select");
   if (setupProvSelect) {
     setupProvSelect.addEventListener("change", () => {
-      syncSetupModalProvider(setupProvSelect.value);
+      syncSetupModalProvider(setupProvSelect.value, true);
     });
   }
 
@@ -1896,22 +2390,24 @@ function initEventListeners() {
       document.getElementById("setup-provider-select")?.value ||
       state.settings.ai_provider ||
       "openrouter";
+    const spec = findProviderSpec(provider_id);
+    const provider_api_url = (document.getElementById("setup-provider-api-url")?.value || "").trim();
+    const jev_model = (document.getElementById("setup-jev-model")?.value || "").trim();
     const api_key = document.getElementById("setup-apikey-input").value.trim();
     const password = document.getElementById("setup-password-input").value;
     const custom_provider_name = (document.getElementById("setup-custom-name")?.value || "").trim();
-    const custom_base_url = (document.getElementById("setup-custom-base-url")?.value || "").trim();
     const custom_portal_url = (document.getElementById("setup-custom-portal-url")?.value || "").trim();
 
     const payload = {
       provider_id,
+      provider_api_url,
+      provider_wire_format: spec.wire_format || "systemone",
+      jev_model,
       api_key,
       password,
     };
     if (provider_id === "custom" || custom_provider_name) {
       payload.custom_provider_name = custom_provider_name;
-    }
-    if (provider_id === "custom" || custom_base_url) {
-      payload.custom_base_url = custom_base_url;
     }
     if (provider_id === "custom" || custom_portal_url) {
       payload.custom_portal_url = custom_portal_url;
@@ -2151,11 +2647,12 @@ function initEventListeners() {
     e.preventDefault();
     const title = document.getElementById("new-feed-title").value.trim();
     const url = document.getElementById("new-feed-url").value.trim();
-    const category = document.getElementById("new-feed-category").value.trim() || "Physics";
+    const category = document.getElementById("new-feed-category").value.trim() || "General";
+    const tags = parseTagsInput(document.getElementById("new-feed-tags")?.value || "");
     try {
       await apiFetch("/api/feeds", {
         method: "POST",
-        body: JSON.stringify({ title, url, category, enabled: true }),
+        body: JSON.stringify({ title, url, category, tags, enabled: true }),
       });
       newFeedForm.reset();
       newFeedForm.classList.add("hidden");
@@ -2232,6 +2729,7 @@ function initEventListeners() {
           title: fd.get("title"),
           url: fd.get("url"),
           category: fd.get("category"),
+          tags: parseTagsInput(fd.get("tags") || ""),
         }),
       });
       await loadFeeds();
@@ -2245,11 +2743,31 @@ function initEventListeners() {
   const newQueryForm = document.getElementById("new-query-form");
   const newQueryTypeSelect = document.getElementById("new-query-type");
   const newLevelsList = document.getElementById("new-query-levels-list");
-  newLevelsList.innerHTML = renderScoreLevelsInputs([
-    "No mention or unrelated to the target methodology",
-    "Briefly mentions or uses standard off-the-shelf methods",
-    "Primary focus introducing or deeply applying the methodology",
-  ]);
+  const DEFAULT_NEW_SCORE_LEVEL_PLACEHOLDERS = [
+    "e.g. No mention or unrelated to the target methodology",
+    "e.g. Briefly mentions or uses standard off-the-shelf methods",
+    "e.g. Primary focus introducing or deeply applying the methodology",
+  ];
+
+  function syncNewQueryTypeUI() {
+    const isScore = newQueryTypeSelect.value === "score";
+    document.getElementById("new-query-noul-criteria").classList.toggle("hidden", isScore);
+    document.getElementById("new-query-score-criteria").classList.toggle("hidden", !isScore);
+    newLevelsList.querySelectorAll(".score-level-input").forEach((inp) => {
+      inp.required = isScore;
+    });
+  }
+
+  function resetNewScoreLevels() {
+    const isScore = newQueryTypeSelect.value === "score";
+    newLevelsList.innerHTML = renderScoreLevelsInputs(DEFAULT_NEW_SCORE_LEVEL_PLACEHOLDERS, {
+      asPlaceholders: true,
+      required: isScore,
+    });
+  }
+
+  resetNewScoreLevels();
+  syncNewQueryTypeUI();
 
   document.getElementById("btn-toggle-new-query").addEventListener("click", () => {
     newQueryForm.classList.toggle("hidden");
@@ -2258,19 +2776,16 @@ function initEventListeners() {
     newQueryForm.classList.add("hidden");
   });
 
-  newQueryTypeSelect.addEventListener("change", () => {
-    const isScore = newQueryTypeSelect.value === "score";
-    document.getElementById("new-query-noul-criteria").classList.toggle("hidden", isScore);
-    document.getElementById("new-query-score-criteria").classList.toggle("hidden", !isScore);
-  });
+  newQueryTypeSelect.addEventListener("change", syncNewQueryTypeUI);
 
   document.getElementById("btn-add-new-score-level").addEventListener("click", () => {
     const count = newLevelsList.querySelectorAll(".level-row").length;
+    const isScore = newQueryTypeSelect.value === "score";
     const wrapper = document.createElement("div");
     wrapper.className = "level-row";
     wrapper.innerHTML = `
       <span class="level-index">Level ${count + 1}</span>
-      <input type="text" class="input score-level-input" placeholder="Describe level ${count + 1}..." required />
+      <input type="text" class="input score-level-input" placeholder="Describe level ${count + 1}..." ${isScore ? "required" : ""} />
       <button type="button" class="btn btn-xs btn-ghost btn-remove-level">✕</button>
     `;
     newLevelsList.appendChild(wrapper);
@@ -2288,6 +2803,10 @@ function initEventListeners() {
       criteria = Array.from(newLevelsList.querySelectorAll(".score-level-input"))
         .map((inp) => inp.value.trim())
         .filter(Boolean);
+      if (criteria.length < 2) {
+        showToast("Please fill in at least 2 rubric levels.", "error");
+        return;
+      }
     } else {
       const t = document.getElementById("new-query-true-desc").value.trim();
       const f = document.getElementById("new-query-false-desc").value.trim();
@@ -2300,6 +2819,8 @@ function initEventListeners() {
         body: JSON.stringify({ name, query_type, instructions, criteria, weight, enabled: true }),
       });
       newQueryForm.reset();
+      resetNewScoreLevels();
+      syncNewQueryTypeUI();
       newQueryForm.classList.add("hidden");
       await loadQueries();
       await loadActiveEntries();
@@ -2345,6 +2866,9 @@ function initEventListeners() {
       const isScore = e.target.value === "score";
       form.querySelector(".edit-noul-box").classList.toggle("hidden", isScore);
       form.querySelector(".edit-score-box").classList.toggle("hidden", !isScore);
+      form.querySelectorAll(".edit-score-box .score-level-input").forEach((inp) => {
+        inp.required = isScore;
+      });
     }
   });
 
@@ -2454,7 +2978,7 @@ function initEventListeners() {
     });
   }
 
-  ["setting-custom-provider-name", "setting-custom-base-url", "setting-custom-portal-url"].forEach(
+  ["setting-provider-api-url", "setting-custom-provider-name", "setting-custom-portal-url"].forEach(
     (id) => {
       const inp = document.getElementById(id);
       if (inp) {
@@ -2472,7 +2996,7 @@ function initEventListeners() {
       const provId = document.getElementById("setting-ai-provider")?.value || "openrouter";
       const customPortal = (document.getElementById("setting-custom-portal-url")?.value || "").trim();
       const spec = findProviderSpec(provId);
-      const url = customPortal || spec.portal_url || (document.getElementById("setting-custom-base-url")?.value || "").trim();
+      const url = customPortal || spec.portal_url || "";
       openExternalUrl(url);
     });
   }
@@ -2489,7 +3013,7 @@ function initEventListeners() {
   if (manageKeyBtn) {
     manageKeyBtn.addEventListener("click", () => {
       const provId = document.getElementById("setting-ai-provider")?.value || state.settings.ai_provider || "openrouter";
-      syncSetupModalProvider(provId);
+      syncSetupModalProvider(provId, false);
       openAuthModal(true);
     });
   }
@@ -2498,14 +3022,14 @@ function initEventListeners() {
   if (fetchModelsBtn) {
     fetchModelsBtn.addEventListener("click", async () => {
       const provider_id = document.getElementById("setting-ai-provider")?.value || "openrouter";
-      const custom_base_url = (document.getElementById("setting-custom-base-url")?.value || "").trim();
+      const provider_api_url = (document.getElementById("setting-provider-api-url")?.value || "").trim();
       const origText = fetchModelsBtn.textContent;
       fetchModelsBtn.disabled = true;
       fetchModelsBtn.textContent = "⏳ Fetching...";
       try {
         const res = await apiFetch("/api/providers/models", {
           method: "POST",
-          body: JSON.stringify({ provider_id, custom_base_url: custom_base_url || undefined }),
+          body: JSON.stringify({ provider_id, provider_api_url: provider_api_url || undefined }),
         });
         const models = res.models || [];
         populateModelDatalist(models);
@@ -2513,7 +3037,7 @@ function initEventListeners() {
           document.getElementById("setting-jev-model").value = models[0];
         }
         showToast(
-          `Loaded ${models.length} models (${res.source === "live_endpoint" ? "live /models API" : "curated catalog"}).`,
+          `Loaded ${models.length} decision model(s) (${res.source === "live_endpoint" ? "live /models API" : "curated catalog"}).`,
           "success"
         );
       } catch (err) {
@@ -2528,9 +3052,10 @@ function initEventListeners() {
   document.getElementById("settings-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const ai_provider = document.getElementById("setting-ai-provider")?.value || "openrouter";
+    const provider_api_url = (document.getElementById("setting-provider-api-url")?.value || "").trim();
+    const provider_wire_format = getSelectedRadioValue("provider_wire_format", "systemone");
     const jev_model = document.getElementById("setting-jev-model").value.trim();
     const custom_provider_name = (document.getElementById("setting-custom-provider-name")?.value || "").trim();
-    const custom_base_url = (document.getElementById("setting-custom-base-url")?.value || "").trim();
     const custom_portal_url = (document.getElementById("setting-custom-portal-url")?.value || "").trim();
     const max_entries_per_feed = Number(document.getElementById("setting-max-entries").value || 25);
 
@@ -2539,15 +3064,16 @@ function initEventListeners() {
         method: "PUT",
         body: JSON.stringify({
           ai_provider,
+          provider_api_url,
+          provider_wire_format,
           jev_model,
           custom_provider_name,
-          custom_base_url,
           custom_portal_url,
           max_entries_per_feed,
         }),
       });
       await Promise.all([loadSettings(), checkAuthStatus(false)]);
-      showToast("AI Provider & Settings saved!", "success");
+      showToast("Decision Provider, URL & Model saved!", "success");
     } catch (err) {
       showToast(err.message, "error");
     }

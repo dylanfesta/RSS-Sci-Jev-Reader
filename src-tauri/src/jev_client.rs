@@ -6,25 +6,26 @@ use std::time::Duration;
 pub const OPENROUTER_DECISIONS_URL: &str = "https://openrouter.ai/api/alpha/decisions";
 pub const OPENROUTER_MODELS_URL: &str =
     "https://openrouter.ai/api/v1/models?output_modalities=decisions";
+pub const NANOGPT_SYSTEMONE_URL: &str = "https://api.nano-gpt.com/api/v1/systemone";
+pub const NANOGPT_MODELS_URL: &str = "https://nano-gpt.com/api/v1/decision-models";
 pub const DEFAULT_PROVIDER_ID: &str = "openrouter";
 pub const DEFAULT_JEV_MODEL: &str = "typesafe/jev-1.14";
-pub const FALLBACK_JEV_MODELS: &[&str] = &[
-    "typesafe/jev-1.14",
-    "typesafe/jev-1.13",
-    "typesafe/jev-router",
-];
+
+pub const WIRE_FORMAT_SYSTEMONE: &str = "systemone";
+pub const WIRE_FORMAT_OPENAI_DECISIONS: &str = "openai_decisions";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderSpec {
     pub id: &'static str,
     pub name: &'static str,
     pub group: &'static str,
-    pub base_url: &'static str,
+    pub api_url: &'static str,
+    pub models_url: &'static str,
     pub portal_url: &'static str,
+    pub wire_format: &'static str,
     pub default_model: &'static str,
     pub recommended_models: &'static [&'static str],
     pub requires_key: bool,
-    pub supports_jev_decisions: bool,
     pub description: &'static str,
 }
 
@@ -32,460 +33,196 @@ pub struct ProviderSpec {
 pub struct ActiveProviderConfig {
     pub provider_id: String,
     pub provider_name: String,
-    pub base_url: String,
+    pub api_url: String,
     pub portal_url: String,
+    pub wire_format: String,
     pub model: String,
     pub requires_key: bool,
-    pub supports_jev_decisions: bool,
 }
 
 pub const BUILTIN_PROVIDERS: &[ProviderSpec] = &[
-    // --- Featured & Aggregators (OpenCode / Multi-Model Gateways) ---
+    // --- Multi-Model Decision Gateways ---
     ProviderSpec {
         id: "openrouter",
-        name: "OpenRouter (TypeSafe Jev + 300+ Models)",
-        group: "Featured and Aggregators",
-        base_url: "https://openrouter.ai/api/v1",
+        name: "OpenRouter (Jev, Clef & Decider)",
+        group: "Multi-Model Decision Gateways",
+        api_url: OPENROUTER_DECISIONS_URL,
+        models_url: OPENROUTER_MODELS_URL,
         portal_url: "https://openrouter.ai/keys",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
         default_model: "typesafe/jev-1.14",
         recommended_models: &[
             "typesafe/jev-1.14",
             "typesafe/jev-1.13",
             "typesafe/jev-router",
-            "google/gemini-2.5-flash",
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3.5-haiku",
-            "deepseek/deepseek-chat",
+            "cloudflare/clef",
+            "cloudflare/clef-flash",
+            "perplexity/pplx-decider-v1.3",
         ],
         requires_key: true,
-        supports_jev_decisions: true,
-        description: "Supports native TypeSafe Jev decision models (/api/alpha/decisions) and 300+ chat models.",
+        description: "OpenRouter Decisions API hosting TypeSafe Jev, Cloudflare Clef, and Perplexity Decider models.",
     },
     ProviderSpec {
         id: "nanogpt",
-        name: "NanoGPT",
-        group: "Featured and Aggregators",
-        base_url: "https://nano-gpt.com/api/v1",
+        name: "NanoGPT (Jev, Rune, Kev & Luna)",
+        group: "Multi-Model Decision Gateways",
+        api_url: NANOGPT_SYSTEMONE_URL,
+        models_url: NANOGPT_MODELS_URL,
         portal_url: "https://nano-gpt.com/api",
-        default_model: "gpt-4o-mini",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
+        default_model: "typesafe/jev-1.14",
         recommended_models: &[
-            "gpt-4o-mini",
-            "chatgpt-4o-latest",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-            "gemini-2.0-flash",
-            "deepseek-chat",
-            "deepseek-reasoner",
-            "llama-3.3-70b",
+            "typesafe/jev-1.14",
+            "typesafe/jev-latest",
+            "typesafe/jev-1.13",
+            "surogate/rune-26b-a4b",
+            "jaredpalmer/kev-9b",
+            "openai/gpt-6-luna-decisions",
         ],
         requires_key: true,
-        supports_jev_decisions: false,
-        description: "Pay-per-prompt access to OpenAI, Claude, Gemini, DeepSeek, and open-weight models via NanoGPT.",
+        description: "Pay-per-request System One endpoint on NanoGPT supporting TypeSafe Jev, Surogate Rune, Kev, and more.",
     },
     ProviderSpec {
-        id: "opencode",
-        name: "OpenCode Zen",
-        group: "Featured and Aggregators",
-        base_url: "https://opencode.ai/zen/v1",
-        portal_url: "https://opencode.ai/auth",
-        default_model: "claude-3-5-haiku",
+        id: "ofox",
+        name: "OfoxAI (System One Gateway)",
+        group: "Multi-Model Decision Gateways",
+        api_url: "https://api.ofox.ai/typesafe/v1/systemone",
+        models_url: "",
+        portal_url: "https://ofox.ai",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
+        default_model: "typesafe/jev-latest",
         recommended_models: &[
-            "claude-3-5-haiku",
-            "claude-sonnet-4",
-            "gpt-4.1-mini",
-            "gpt-4.1",
-            "gemini-2.5-flash",
+            "typesafe/jev-latest",
+            "typesafe/jev-1.14",
+            "typesafe/jev-1.13",
         ],
         requires_key: true,
-        supports_jev_decisions: false,
-        description: "OpenCode Zen unified gateway for coding and reasoning models.",
+        description: "OfoxAI unified System One gateway for TypeSafe Jev decision models.",
     },
-    // --- Frontier Model Labs ---
+    // --- First-Party Decision Model Labs ---
     ProviderSpec {
-        id: "openai",
-        name: "OpenAI",
-        group: "Frontier Labs",
-        base_url: "https://api.openai.com/v1",
-        portal_url: "https://platform.openai.com/api-keys",
-        default_model: "gpt-4o-mini",
-        recommended_models: &[
-            "gpt-4o-mini",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "gpt-4.1",
-            "gpt-4o",
-            "o4-mini",
-        ],
+        id: "typesafe",
+        name: "TypeSafe AI (Direct Jev API)",
+        group: "First-Party Decision Labs",
+        api_url: "https://api.typesafe.ai/v1/systemone",
+        models_url: "https://api.typesafe.ai/v1/models",
+        portal_url: "https://typesafe.ai",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
+        default_model: "jev-latest",
+        recommended_models: &["jev-latest", "jev-1.14.0", "jev-1.13.0"],
         requires_key: true,
-        supports_jev_decisions: false,
-        description: "Official OpenAI API (GPT-4o, GPT-4.1, o3/o4 series).",
-    },
-    ProviderSpec {
-        id: "anthropic",
-        name: "Anthropic (Claude)",
-        group: "Frontier Labs",
-        base_url: "https://api.anthropic.com/v1",
-        portal_url: "https://console.anthropic.com/settings/keys",
-        default_model: "claude-3-5-haiku-latest",
-        recommended_models: &[
-            "claude-3-5-haiku-latest",
-            "claude-sonnet-4-20250514",
-            "claude-3-7-sonnet-latest",
-            "claude-3-5-sonnet-latest",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Official Anthropic Messages API for Claude Haiku, Sonnet, and Opus.",
-    },
-    ProviderSpec {
-        id: "google",
-        name: "Google Gemini (AI Studio)",
-        group: "Frontier Labs",
-        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
-        portal_url: "https://aistudio.google.com/app/apikey",
-        default_model: "gemini-2.5-flash",
-        recommended_models: &[
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Google AI Studio OpenAI-compatible endpoint for Gemini 2.5 / 2.0 models.",
-    },
-    ProviderSpec {
-        id: "deepseek",
-        name: "DeepSeek",
-        group: "Frontier Labs",
-        base_url: "https://api.deepseek.com/v1",
-        portal_url: "https://platform.deepseek.com/api_keys",
-        default_model: "deepseek-chat",
-        recommended_models: &["deepseek-chat", "deepseek-reasoner"],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Official DeepSeek API (DeepSeek-V3 and DeepSeek-R1).",
-    },
-    ProviderSpec {
-        id: "xai",
-        name: "xAI (Grok)",
-        group: "Frontier Labs",
-        base_url: "https://api.x.ai/v1",
-        portal_url: "https://console.x.ai",
-        default_model: "grok-3-mini",
-        recommended_models: &["grok-3-mini", "grok-3", "grok-2-latest"],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Official xAI API for Grok-3 and Grok-2 models.",
-    },
-    ProviderSpec {
-        id: "mistral",
-        name: "Mistral AI",
-        group: "Frontier Labs",
-        base_url: "https://api.mistral.ai/v1",
-        portal_url: "https://console.mistral.ai/api-keys",
-        default_model: "mistral-small-latest",
-        recommended_models: &[
-            "mistral-small-latest",
-            "mistral-large-latest",
-            "ministral-8b-latest",
-            "codestral-latest",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Mistral La Plateforme API.",
-    },
-    // --- Fast Inference & OpenCode Ecosystem Providers ---
-    ProviderSpec {
-        id: "groq",
-        name: "Groq",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.groq.com/openai/v1",
-        portal_url: "https://console.groq.com/keys",
-        default_model: "llama-3.3-70b-versatile",
-        recommended_models: &[
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "deepseek-r1-distill-llama-70b",
-            "qwen-qwq-32b",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Ultra-fast LPU inference for Llama, DeepSeek, and Qwen models.",
-    },
-    ProviderSpec {
-        id: "cerebras",
-        name: "Cerebras",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.cerebras.ai/v1",
-        portal_url: "https://cloud.cerebras.ai",
-        default_model: "llama-3.3-70b",
-        recommended_models: &["llama-3.3-70b", "llama3.1-8b", "qwen-3-32b"],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Wafer-scale high-speed inference cloud.",
-    },
-    ProviderSpec {
-        id: "together",
-        name: "Together AI",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.together.xyz/v1",
-        portal_url: "https://api.together.ai/settings/api-keys",
-        default_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        recommended_models: &[
-            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-            "Qwen/Qwen2.5-72B-Instruct-Turbo",
-            "deepseek-ai/DeepSeek-V3",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Together AI cloud for open-source models.",
-    },
-    ProviderSpec {
-        id: "fireworks",
-        name: "Fireworks AI",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.fireworks.ai/inference/v1",
-        portal_url: "https://fireworks.ai/account/api-keys",
-        default_model: "accounts/fireworks/models/llama-v3p3-70b-instruct",
-        recommended_models: &[
-            "accounts/fireworks/models/llama-v3p3-70b-instruct",
-            "accounts/fireworks/models/deepseek-v3",
-            "accounts/fireworks/models/qwen2p5-72b-instruct",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Fast serverless open-weight model inference.",
-    },
-    ProviderSpec {
-        id: "venice",
-        name: "Venice AI",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.venice.ai/api/v1",
-        portal_url: "https://venice.ai/settings/api",
-        default_model: "llama-3.3-70b",
-        recommended_models: &["llama-3.3-70b", "deepseek-r1-671b", "qwen-2.5-vl"],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Privacy-first uncensored open-model API.",
-    },
-    ProviderSpec {
-        id: "chutes",
-        name: "Chutes AI",
-        group: "Fast Inference and Cloud",
-        base_url: "https://llm.chutes.ai/v1",
-        portal_url: "https://chutes.ai",
-        default_model: "deepseek-ai/DeepSeek-V3",
-        recommended_models: &[
-            "deepseek-ai/DeepSeek-V3",
-            "deepseek-ai/DeepSeek-R1",
-            "unsloth/Llama-3.3-70B-Instruct",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Decentralized serverless AI compute (Bittensor SN64).",
-    },
-    ProviderSpec {
-        id: "siliconflow",
-        name: "SiliconFlow",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.siliconflow.cn/v1",
-        portal_url: "https://cloud.siliconflow.cn/account/ak",
-        default_model: "deepseek-ai/DeepSeek-V3",
-        recommended_models: &[
-            "deepseek-ai/DeepSeek-V3",
-            "Qwen/Qwen2.5-72B-Instruct",
-            "deepseek-ai/DeepSeek-R1",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "High-speed inference platform for Qwen and DeepSeek.",
-    },
-    ProviderSpec {
-        id: "zai",
-        name: "Z.ai (Zhipu GLM)",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.z.ai/api/paas/v4",
-        portal_url: "https://z.ai",
-        default_model: "glm-4.5-flash",
-        recommended_models: &["glm-4.5-flash", "glm-4.5", "glm-4-plus"],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Z.ai / Zhipu GLM-4.5 series API.",
+        description: "Official first-party TypeSafe AI /v1/systemone endpoint for Jev models.",
     },
     ProviderSpec {
         id: "perplexity",
-        name: "Perplexity (Sonar)",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.perplexity.ai",
+        name: "Perplexity Decisions (pplx-decider)",
+        group: "First-Party Decision Labs",
+        api_url: "https://api.perplexity.ai/v1/decisions",
+        models_url: "",
         portal_url: "https://www.perplexity.ai/settings/api",
-        default_model: "sonar",
-        recommended_models: &["sonar", "sonar-pro", "sonar-reasoning"],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Perplexity Sonar API.",
-    },
-    ProviderSpec {
-        id: "deepinfra",
-        name: "DeepInfra",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.deepinfra.com/v1/openai",
-        portal_url: "https://deepinfra.com/dash/api_keys",
-        default_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
+        default_model: "pplx-decider-latest",
         recommended_models: &[
-            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-            "deepseek-ai/DeepSeek-V3",
-            "Qwen/Qwen2.5-72B-Instruct",
+            "pplx-decider-latest",
+            "pplx-decider-v1.3",
+            "pplx-decider-flash-latest",
         ],
         requires_key: true,
-        supports_jev_decisions: false,
-        description: "Low-cost serverless inference for open models.",
+        description: "Perplexity native /v1/decisions endpoint powered by pplx-decider models.",
     },
     ProviderSpec {
-        id: "hyperbolic",
-        name: "Hyperbolic",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.hyperbolic.xyz/v1",
-        portal_url: "https://app.hyperbolic.xyz/settings",
-        default_model: "meta-llama/Llama-3.3-70B-Instruct",
+        id: "openai-decisions",
+        name: "OpenAI Decisions (gpt-6-luna)",
+        group: "First-Party Decision Labs",
+        api_url: "https://api.openai.com/v1/decisions",
+        models_url: "",
+        portal_url: "https://platform.openai.com/api-keys",
+        wire_format: WIRE_FORMAT_OPENAI_DECISIONS,
+        default_model: "gpt-6-luna",
+        recommended_models: &["gpt-6-luna"],
+        requires_key: true,
+        description: "Official OpenAI /v1/decisions endpoint (predicate & 0-indexed rubric score format) powered by gpt-6-luna.",
+    },
+    // --- Local, Self-Hosted & Custom Gateways ---
+    ProviderSpec {
+        id: "local-decider",
+        name: "Local Decider / Self-Hosted Clef (127.0.0.1:8080)",
+        group: "Local and Custom Gateways",
+        api_url: "http://127.0.0.1:8080/v1/decisions",
+        models_url: "http://127.0.0.1:8080/v1/models",
+        portal_url: "",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
+        default_model: "pplx-decider-flash",
         recommended_models: &[
-            "meta-llama/Llama-3.3-70B-Instruct",
-            "deepseek-ai/DeepSeek-V3",
-            "Qwen/Qwen2.5-72B-Instruct",
+            "pplx-decider-flash",
+            "cloudflare/clef",
+            "cloudflare/clef-flash",
+            "surogate/rune-26b-a4b",
         ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Open-access AI cloud for frontier open-weight models.",
-    },
-    ProviderSpec {
-        id: "featherless",
-        name: "Featherless AI",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.featherless.ai/v1",
-        portal_url: "https://featherless.ai/account/api-keys",
-        default_model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        recommended_models: &[
-            "meta-llama/Meta-Llama-3.1-70B-Instruct",
-            "Qwen/Qwen2.5-72B-Instruct",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Serverless access to thousands of HuggingFace models.",
-    },
-    ProviderSpec {
-        id: "sambanova",
-        name: "SambaNova Cloud",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.sambanova.ai/v1",
-        portal_url: "https://cloud.sambanova.ai/apis",
-        default_model: "Meta-Llama-3.3-70B-Instruct",
-        recommended_models: &[
-            "Meta-Llama-3.3-70B-Instruct",
-            "DeepSeek-R1-Distill-Llama-70B",
-            "Qwen2.5-72B-Instruct",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "SambaNova RDU-accelerated inference.",
-    },
-    ProviderSpec {
-        id: "nebius",
-        name: "Nebius AI Studio",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.studio.nebius.ai/v1",
-        portal_url: "https://studio.nebius.ai/settings/api-keys",
-        default_model: "meta-llama/Llama-3.3-70B-Instruct",
-        recommended_models: &[
-            "meta-llama/Llama-3.3-70B-Instruct",
-            "deepseek-ai/DeepSeek-V3",
-            "Qwen/Qwen2.5-72B-Instruct",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Nebius AI Studio OpenAI-compatible inference.",
-    },
-    ProviderSpec {
-        id: "nvidia",
-        name: "NVIDIA NIM",
-        group: "Fast Inference and Cloud",
-        base_url: "https://integrate.api.nvidia.com/v1",
-        portal_url: "https://build.nvidia.com",
-        default_model: "meta/llama-3.3-70b-instruct",
-        recommended_models: &[
-            "meta/llama-3.3-70b-instruct",
-            "deepseek-ai/deepseek-r1",
-            "nvidia/llama-3.1-nemotron-70b-instruct",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "NVIDIA NIM API catalog.",
-    },
-    ProviderSpec {
-        id: "github-models",
-        name: "GitHub Models",
-        group: "Fast Inference and Cloud",
-        base_url: "https://models.inference.ai.azure.com",
-        portal_url: "https://github.com/settings/tokens",
-        default_model: "gpt-4o-mini",
-        recommended_models: &["gpt-4o-mini", "gpt-4o", "Llama-3.3-70B-Instruct"],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "GitHub Models Azure inference endpoint (uses GitHub PAT).",
-    },
-    ProviderSpec {
-        id: "novita",
-        name: "Novita AI",
-        group: "Fast Inference and Cloud",
-        base_url: "https://api.novita.ai/v3/openai",
-        portal_url: "https://novita.ai/settings/key-management",
-        default_model: "meta-llama/llama-3.3-70b-instruct",
-        recommended_models: &[
-            "meta-llama/llama-3.3-70b-instruct",
-            "deepseek/deepseek-v3",
-            "qwen/qwen-2.5-72b-instruct",
-        ],
-        requires_key: true,
-        supports_jev_decisions: false,
-        description: "Novita AI serverless LLM API.",
-    },
-    // --- Local & Self-Hosted / Custom ---
-    ProviderSpec {
-        id: "ollama",
-        name: "Ollama (Local)",
-        group: "Local and Custom Providers",
-        base_url: "http://127.0.0.1:11434/v1",
-        portal_url: "https://ollama.com/library",
-        default_model: "llama3.2",
-        recommended_models: &["llama3.2", "qwen2.5:14b", "deepseek-r1:14b", "mistral"],
         requires_key: false,
-        supports_jev_decisions: false,
-        description: "Local Ollama server on 127.0.0.1:11434 (no API key required).",
+        description: "Local offline decision server (e.g. Decider for Mac, local Cloudflare Clef, or vLLM SystemOne runner — no API key required).",
     },
     ProviderSpec {
-        id: "lmstudio",
-        name: "LM Studio (Local)",
-        group: "Local and Custom Providers",
-        base_url: "http://127.0.0.1:1234/v1",
-        portal_url: "https://lmstudio.ai",
-        default_model: "local-model",
-        recommended_models: &["local-model"],
+        id: "litellm",
+        name: "LiteLLM / Bifrost / TrueFoundry Proxy",
+        group: "Local and Custom Gateways",
+        api_url: "http://127.0.0.1:4000/v1/systemone",
+        models_url: "http://127.0.0.1:4000/v1/models",
+        portal_url: "",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
+        default_model: "typesafe/jev-latest",
+        recommended_models: &[
+            "typesafe/jev-latest",
+            "typesafe/jev-1.14",
+            "cloudflare/clef",
+            "gpt-6-luna",
+        ],
         requires_key: false,
-        supports_jev_decisions: false,
-        description: "Local LM Studio OpenAI server on 127.0.0.1:1234 (no API key required).",
+        description: "Self-hosted AI gateway exposing /v1/systemone or /v1/decisions (API key optional).",
     },
     ProviderSpec {
         id: "custom",
-        name: "Custom / Own Provider (OpenAI-Compatible)",
-        group: "Local and Custom Providers",
-        base_url: "https://your-provider.example.com/v1",
-        portal_url: "https://your-provider.example.com",
-        default_model: "gpt-4o-mini",
-        recommended_models: &["gpt-4o-mini", "local-model"],
+        name: "Custom Decision Endpoint",
+        group: "Local and Custom Gateways",
+        api_url: OPENROUTER_DECISIONS_URL,
+        models_url: "",
+        portal_url: "",
+        wire_format: WIRE_FORMAT_SYSTEMONE,
+        default_model: DEFAULT_JEV_MODEL,
+        recommended_models: &[
+            "typesafe/jev-1.14",
+            "jev-latest",
+            "cloudflare/clef",
+            "pplx-decider-latest",
+            "gpt-6-luna",
+        ],
         requires_key: false,
-        supports_jev_decisions: false,
-        description: "Connect your own OpenAI-compatible provider, LiteLLM proxy, vLLM server, or custom gateway with your own Base URL and Portal link.",
+        description: "Connect any custom System One or OpenAI Decisions API URL and model name (API key optional).",
     },
 ];
+
+pub fn is_valid_provider_id(id: &str) -> bool {
+    let clean = id.trim().to_lowercase();
+    BUILTIN_PROVIDERS.iter().any(|p| p.id == clean)
+}
+
+pub fn normalize_wire_format(raw: &str) -> &'static str {
+    match raw.trim().to_lowercase().as_str() {
+        "openai_decisions" | "openai-decisions" | "openai" => WIRE_FORMAT_OPENAI_DECISIONS,
+        _ => WIRE_FORMAT_SYSTEMONE,
+    }
+}
+
+pub fn infer_wire_format_for_url(api_url: &str, fallback: &str) -> &'static str {
+    let lower = api_url.trim().to_lowercase();
+    if lower.contains("api.openai.com/") && lower.ends_with("/decisions") {
+        return WIRE_FORMAT_OPENAI_DECISIONS;
+    }
+    if lower.ends_with("/systemone") || lower.contains("/api/alpha/decisions") {
+        return WIRE_FORMAT_SYSTEMONE;
+    }
+    normalize_wire_format(fallback)
+}
 
 pub fn list_providers_json() -> Vec<Value> {
     BUILTIN_PROVIDERS
@@ -496,10 +233,28 @@ pub fn list_providers_json() -> Vec<Value> {
 
 pub fn get_provider_spec(provider_id: &str) -> &'static ProviderSpec {
     let clean = provider_id.trim().to_lowercase();
+    if clean == "openai" {
+        return BUILTIN_PROVIDERS
+            .iter()
+            .find(|p| p.id == "openai-decisions")
+            .unwrap_or(&BUILTIN_PROVIDERS[0]);
+    }
     BUILTIN_PROVIDERS
         .iter()
         .find(|p| p.id == clean)
         .unwrap_or(&BUILTIN_PROVIDERS[0])
+}
+
+pub fn resolve_model_for_provider(provider_id: &str, model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        return get_provider_spec(provider_id).default_model.to_string();
+    }
+    // Only normalize legacy OpenRouter shorthand when OpenRouter is active
+    if provider_id == "openrouter" && matches!(m, "typesafe/jev-latest" | "jev-latest") {
+        return DEFAULT_JEV_MODEL.to_string();
+    }
+    m.to_string()
 }
 
 pub fn resolve_active_provider_config(settings: &HashMap<String, String>) -> ActiveProviderConfig {
@@ -514,28 +269,46 @@ pub fn resolve_active_provider_config(settings: &HashMap<String, String>) -> Act
         .get("custom_provider_name")
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let custom_base = settings
-        .get("custom_base_url")
-        .map(|s| s.trim().trim_end_matches('/'))
+    let configured_api_url = settings
+        .get("provider_api_url")
+        .map(|s| s.trim())
         .filter(|s| !s.is_empty());
+    let legacy_custom_base = settings
+        .get("custom_base_url")
+        .map(|s| s.trim())
+        .filter(|s| {
+            !s.is_empty()
+                && s.trim_end_matches('/') != "https://openrouter.ai/api/v1"
+                && s.trim_end_matches('/') != "https://nano-gpt.com/api/v1"
+        });
     let custom_portal = settings
         .get("custom_portal_url")
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
 
     let provider_name = if spec.id == "custom" {
-        custom_name.unwrap_or("Custom Provider").to_string()
+        custom_name.unwrap_or("Custom Decision Endpoint").to_string()
     } else {
         custom_name.unwrap_or(spec.name).to_string()
     };
 
-    let base_url = custom_base
+    let api_url = configured_api_url
+        .or(legacy_custom_base)
         .map(|s| s.to_string())
-        .unwrap_or_else(|| spec.base_url.to_string());
+        .unwrap_or_else(|| spec.api_url.to_string());
 
     let portal_url = custom_portal
         .map(|s| s.to_string())
         .unwrap_or_else(|| spec.portal_url.to_string());
+
+    let explicit_wf = settings
+        .get("provider_wire_format")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let wire_format = match explicit_wf {
+        Some(wf) => normalize_wire_format(wf).to_string(),
+        None => infer_wire_format_for_url(&api_url, spec.wire_format).to_string(),
+    };
 
     let raw_model = settings
         .get("jev_model")
@@ -543,47 +316,21 @@ pub fn resolve_active_provider_config(settings: &HashMap<String, String>) -> Act
         .filter(|s| !s.is_empty())
         .unwrap_or(spec.default_model);
 
-    let model = if spec.id == "openrouter" {
-        resolve_model_alias(raw_model)
-    } else {
-        raw_model.to_string()
-    };
+    let model = resolve_model_for_provider(spec.id, raw_model);
 
     ActiveProviderConfig {
         provider_id: spec.id.to_string(),
         provider_name,
-        base_url,
+        api_url,
         portal_url,
+        wire_format,
         model,
         requires_key: spec.requires_key,
-        supports_jev_decisions: spec.supports_jev_decisions,
     }
 }
 
 fn round4(val: f64) -> f64 {
     (val * 10000.0).round() / 10000.0
-}
-
-pub fn resolve_model_alias(model: &str) -> String {
-    let m = model.trim();
-    if m.is_empty()
-        || matches!(
-            m,
-            "typesafe/jev-latest" | "jev-latest" | "jev" | "typesafe/jev"
-        )
-    {
-        DEFAULT_JEV_MODEL.to_string()
-    } else {
-        m.to_string()
-    }
-}
-
-pub fn is_jev_decisions_model(provider_id: &str, model: &str) -> bool {
-    if provider_id.trim().to_lowercase() != "openrouter" {
-        return false;
-    }
-    let m = resolve_model_alias(model).to_lowercase();
-    m.starts_with("typesafe/jev") || m.starts_with("jev")
 }
 
 pub fn build_entry_state(entry: &Value) -> Value {
@@ -602,6 +349,33 @@ pub fn build_entry_state(entry: &Value) -> Value {
         "abstract": get_str("summary"),
         "link": get_str("link"),
     })
+}
+
+pub fn format_state_as_input_text(state: &Value) -> String {
+    if let Some(s) = state.as_str() {
+        return s.to_string();
+    }
+    if let Some(obj) = state.as_object() {
+        let mut lines = Vec::new();
+        for (label, key) in [
+            ("Journal", "journal"),
+            ("Title", "title"),
+            ("Authors", "authors"),
+            ("Published", "published_at"),
+            ("Abstract", "abstract"),
+            ("Link", "link"),
+        ] {
+            if let Some(val) = obj.get(key).and_then(|v| v.as_str()) {
+                if !val.trim().is_empty() {
+                    lines.push(format!("{}: {}", label, val.trim()));
+                }
+            }
+        }
+        if !lines.is_empty() {
+            return lines.join("\n");
+        }
+    }
+    serde_json::to_string_pretty(state).unwrap_or_default()
 }
 
 pub fn build_question_spec(query: &Value) -> Result<Value, String> {
@@ -653,19 +427,21 @@ pub fn build_question_spec(query: &Value) -> Result<Value, String> {
     }
 
     if qtype == "score" {
-        let arr = criteria
-            .and_then(|c| c.as_array())
-            .ok_or_else(|| {
-                format!(
-                    "Score query '{}' must have at least 2 criteria levels.",
-                    query.get("name").and_then(|v| v.as_str()).unwrap_or("")
-                )
-            })?;
+        let arr = criteria.and_then(|c| c.as_array()).ok_or_else(|| {
+            format!(
+                "Score query '{}' must have at least 2 criteria levels.",
+                query.get("name").and_then(|v| v.as_str()).unwrap_or("")
+            )
+        })?;
         let clean_levels: Vec<String> = arr
             .iter()
             .filter_map(|v| {
                 let s = v.as_str().unwrap_or("").trim().to_string();
-                if s.is_empty() { None } else { Some(s) }
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
             })
             .collect();
         if clean_levels.len() < 2 {
@@ -682,6 +458,117 @@ pub fn build_question_spec(query: &Value) -> Result<Value, String> {
     }
 
     Err(format!("Unsupported query_type: {}", qtype))
+}
+
+/// Converts our canonical System One `{ state, questions }` map into OpenAI `/v1/decisions`
+/// request format (`{ model, input, questions: [ { type: "predicate" | "score", name, ... } ] }`).
+pub fn build_openai_decisions_payload(
+    model: &str,
+    state: &Value,
+    questions: &Value,
+) -> Result<Value, String> {
+    let q_obj = questions
+        .as_object()
+        .ok_or_else(|| "Expected questions map.".to_string())?;
+    let mut questions_arr = Vec::with_capacity(q_obj.len());
+
+    for (key, q_spec) in q_obj {
+        let qtype = q_spec.get("type").and_then(|v| v.as_str()).unwrap_or("noul");
+        let base_instr = q_spec
+            .get("instructions")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+
+        if qtype == "noul" {
+            let mut full_instr = base_instr.to_string();
+            if let Some(crit) = q_spec.get("criteria").and_then(|c| c.as_object()) {
+                let t = crit.get("true").and_then(|v| v.as_str()).unwrap_or("").trim();
+                let f = crit.get("false").and_then(|v| v.as_str()).unwrap_or("").trim();
+                if !t.is_empty() || !f.is_empty() {
+                    full_instr = format!(
+                        "{} (True when: {} | False when: {})",
+                        base_instr, t, f
+                    );
+                }
+            }
+            questions_arr.push(json!({
+                "type": "predicate",
+                "name": key,
+                "instructions": full_instr,
+            }));
+        } else if qtype == "score" {
+            let levels_raw = q_spec
+                .get("criteria")
+                .and_then(|c| c.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let levels_objs: Vec<Value> = levels_raw
+                .iter()
+                .enumerate()
+                .map(|(idx, lvl)| {
+                    let desc = lvl.as_str().unwrap_or("").trim();
+                    json!({
+                        "label": format!("level_{}", idx + 1),
+                        "description": desc,
+                    })
+                })
+                .collect();
+            questions_arr.push(json!({
+                "type": "score",
+                "name": key,
+                "instructions": base_instr,
+                "levels": levels_objs,
+            }));
+        }
+    }
+
+    Ok(json!({
+        "model": model,
+        "input": format_state_as_input_text(state),
+        "questions": questions_arr,
+    }))
+}
+
+/// Normalizes either `{ "answers": { "k": ... } }` (System One) or
+/// `{ "answers": [ { "name": "k", ... } ] }` (OpenAI `/v1/decisions`) into a keyed JSON object.
+pub fn extract_answers_map_from_response(data: &Value, is_zero_indexed_hint: bool) -> Result<Value, String> {
+    if let Some(answers) = data.get("answers") {
+        if answers.is_object() {
+            if !is_zero_indexed_hint {
+                return Ok(answers.clone());
+            }
+            let mut tagged = answers.as_object().unwrap().clone();
+            for (_k, v) in tagged.iter_mut() {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("__zero_indexed_score".to_string(), Value::Bool(true));
+                }
+            }
+            return Ok(Value::Object(tagged));
+        }
+        if let Some(arr) = answers.as_array() {
+            let mut map = serde_json::Map::new();
+            for item in arr {
+                if let Some(obj) = item.as_object() {
+                    let name_opt = obj
+                        .get("name")
+                        .or_else(|| obj.get("id"))
+                        .or_else(|| obj.get("key"))
+                        .and_then(|v| v.as_str());
+                    if let Some(name) = name_opt {
+                        let mut cloned = obj.clone();
+                        cloned.insert("__zero_indexed_score".to_string(), Value::Bool(true));
+                        map.insert(name.to_string(), Value::Object(cloned));
+                    }
+                }
+            }
+            return Ok(Value::Object(map));
+        }
+    }
+    if data.is_object() {
+        return Ok(data.clone());
+    }
+    Err("Unexpected response format from Decisions API.".to_string())
 }
 
 fn value_as_f64(v: &Value) -> Option<f64> {
@@ -708,10 +595,7 @@ pub fn normalize_jev_answer(query: &Value, answer: &Value) -> Result<Value, Stri
         .filter(|s| !s.is_empty())
         .unwrap_or("Unnamed Query")
         .to_string();
-    let qweight = query
-        .get("weight")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1.0);
+    let qweight = query.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
     let qinstructions = query
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -821,14 +705,34 @@ pub fn normalize_jev_answer(query: &Value, answer: &Value) -> Result<Value, Stri
 
         let k = levels.len();
         let probs = answer.get("probabilities");
-        let raw_score = answer.get("score");
+        let raw_score = answer
+            .get("score")
+            .or_else(|| answer.get("expected_score"));
+        let zero_indexed_hint = answer
+            .get("__zero_indexed_score")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let mut clean_probs: Vec<f64> = Vec::new();
         if let Some(arr) = probs.and_then(|p| p.as_array()) {
             if arr.len() == k {
                 clean_probs = arr
                     .iter()
-                    .map(|p| value_as_f64(p).unwrap_or(0.0).max(0.0))
+                    .map(|p| {
+                        if let Some(f) = value_as_f64(p) {
+                            f.max(0.0)
+                        } else if let Some(p_obj) = p.as_object() {
+                            p_obj
+                                .get("probability")
+                                .or_else(|| p_obj.get("prob"))
+                                .or_else(|| p_obj.get("p"))
+                                .and_then(value_as_f64)
+                                .unwrap_or(0.0)
+                                .max(0.0)
+                        } else {
+                            0.0
+                        }
+                    })
                     .collect();
             }
         } else if let Some(obj) = probs.and_then(|p| p.as_object()) {
@@ -838,6 +742,12 @@ pub fn normalize_jev_answer(query: &Value, answer: &Value) -> Result<Value, Stri
                 .map(|(i, lvl)| {
                     obj.get(lvl)
                         .or_else(|| obj.get(&i.to_string()))
+                        .or_else(|| {
+                            let lower_lvl = lvl.to_lowercase();
+                            obj.iter()
+                                .find(|(ok, _)| ok.to_lowercase() == lower_lvl)
+                                .map(|(_, ov)| ov)
+                        })
                         .and_then(value_as_f64)
                         .unwrap_or(0.0)
                         .max(0.0)
@@ -874,27 +784,35 @@ pub fn normalize_jev_answer(query: &Value, answer: &Value) -> Result<Value, Stri
                     let n = (idx as f64) / ((k - 1) as f64);
                     (n, (idx + 1) as f64, idx)
                 } else {
-                    let val = rs_str.parse::<f64>().unwrap_or(1.0);
-                    if (1.0..=(k as f64)).contains(&val) {
+                    let val = rs_str.parse::<f64>().unwrap_or(if zero_indexed_hint { 0.0 } else { 1.0 });
+                    if zero_indexed_hint {
+                        let n = val / ((k - 1) as f64);
+                        let b = (val.round() as isize).clamp(0, (k - 1) as isize) as usize;
+                        (n, val + 1.0, b)
+                    } else if (1.0..=(k as f64)).contains(&val) {
                         let n = (val - 1.0) / ((k - 1) as f64);
                         let b = ((val - 1.0).round() as isize).clamp(0, (k - 1) as isize) as usize;
                         (n, val, b)
                     } else {
                         let n = val / ((k - 1) as f64);
                         let b = (val.round() as isize).clamp(0, (k - 1) as isize) as usize;
-                        (n, val, b)
+                        (n, val + 1.0, b)
                     }
                 }
             } else {
-                let val = value_as_f64(rs).unwrap_or(1.0);
-                if (1.0..=(k as f64)).contains(&val) {
+                let val = value_as_f64(rs).unwrap_or(if zero_indexed_hint { 0.0 } else { 1.0 });
+                if zero_indexed_hint {
+                    let n = val / ((k - 1) as f64);
+                    let b = (val.round() as isize).clamp(0, (k - 1) as isize) as usize;
+                    (n, val + 1.0, b)
+                } else if (1.0..=(k as f64)).contains(&val) {
                     let n = (val - 1.0) / ((k - 1) as f64);
                     let b = ((val - 1.0).round() as isize).clamp(0, (k - 1) as isize) as usize;
                     (n, val, b)
                 } else {
                     let n = val / ((k - 1) as f64);
                     let b = (val.round() as isize).clamp(0, (k - 1) as isize) as usize;
-                    (n, val, b)
+                    (n, val + 1.0, b)
                 }
             }
         } else {
@@ -951,10 +869,8 @@ pub fn normalize_jev_answer(query: &Value, answer: &Value) -> Result<Value, Stri
                 .unwrap_or_else(|| json!([]))
         };
 
-        let legend_out = answer
-            .get("legend")
-            .cloned()
-            .unwrap_or_else(|| json!(levels));
+        // Always normalize legend to a clean ordered string array so the UI probability bars render across all providers
+        let legend_out = json!(levels);
 
         return Ok(json!({
             "query_name_snapshot": qname,
@@ -981,37 +897,89 @@ pub fn normalize_jev_answer(query: &Value, answer: &Value) -> Result<Value, Stri
     Err(format!("Unsupported query_type: {}", qtype))
 }
 
-async fn discover_openrouter_decision_models(client: &reqwest::Client) -> Vec<String> {
-    if let Ok(resp) = client
-        .get(OPENROUTER_MODELS_URL)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
+fn derive_models_urls(provider_cfg: &ActiveProviderConfig) -> Vec<String> {
+    let api_url = provider_cfg.api_url.trim().trim_end_matches('/');
+    let mut urls = Vec::new();
+    if api_url.contains("openrouter.ai") {
+        urls.push(OPENROUTER_MODELS_URL.to_string());
+        return urls;
+    }
+    if api_url.contains("nano-gpt.com") {
+        urls.push(NANOGPT_MODELS_URL.to_string());
+        urls.push("https://api.nano-gpt.com/api/v1/decision-models".to_string());
+        return urls;
+    }
+    let spec = get_provider_spec(&provider_cfg.provider_id);
+    if !spec.models_url.is_empty() {
+        urls.push(spec.models_url.to_string());
+    }
+    if let Some(prefix) = api_url
+        .strip_suffix("/decisions")
+        .or_else(|| api_url.strip_suffix("/systemone"))
     {
+        let derived = format!("{}/models", prefix);
+        if !urls.contains(&derived) {
+            urls.push(derived);
+        }
+    }
+    urls
+}
+
+async fn discover_decision_models_at(
+    client: &reqwest::Client,
+    models_url: &str,
+    api_key: Option<&str>,
+) -> Vec<String> {
+    let mut req = client
+        .get(models_url)
+        .header("Accept", "application/json")
+        .timeout(Duration::from_secs(10));
+    if let Some(k) = api_key {
+        if !k.trim().is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", k.trim()));
+        }
+    }
+    if let Ok(resp) = req.send().await {
         if resp.status().is_success() {
             if let Ok(data) = resp.json::<Value>().await {
-                if let Some(arr) = data.get("data").and_then(|d| d.as_array()) {
+                let arr_opt = data
+                    .get("data")
+                    .and_then(|d| d.as_array())
+                    .or_else(|| data.get("models").and_then(|d| d.as_array()))
+                    .or_else(|| data.as_array());
+                if let Some(arr) = arr_opt {
                     let ids: Vec<String> = arr
                         .iter()
+                        .take(120)
                         .filter_map(|item| {
                             item.get("id")
                                 .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
+                                .or_else(|| item.get("model").and_then(|v| v.as_str()))
+                                .or_else(|| item.get("name").and_then(|v| v.as_str()))
+                                .or_else(|| item.as_str())
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
                         })
                         .collect();
-                    let jev_ids: Vec<String> = ids
+                    let preferred: Vec<String> = ids
                         .iter()
                         .filter(|m| {
                             let l = m.to_lowercase();
-                            l.contains("jev") && !l.contains("router")
+                            (l.contains("jev")
+                                || l.contains("clef")
+                                || l.contains("decider")
+                                || l.contains("rune")
+                                || l.contains("luna")
+                                || l.contains("kev"))
+                                && !l.contains("router")
                         })
                         .cloned()
                         .collect();
                     let other_ids: Vec<String> = ids
                         .into_iter()
-                        .filter(|m| !jev_ids.contains(m))
+                        .filter(|m| !preferred.contains(m))
                         .collect();
-                    let mut combined = jev_ids;
+                    let mut combined = preferred;
                     combined.extend(other_ids);
                     return combined;
                 }
@@ -1021,10 +989,30 @@ async fn discover_openrouter_decision_models(client: &reqwest::Client) -> Vec<St
     Vec::new()
 }
 
+fn is_loopback_endpoint(url: &str) -> bool {
+    let lower = url.trim().to_lowercase();
+    lower.starts_with("http://127.0.0.1")
+        || lower.starts_with("https://127.0.0.1")
+        || lower.starts_with("http://localhost")
+        || lower.starts_with("https://localhost")
+        || lower.starts_with("http://[::1]")
+        || lower.starts_with("https://[::1]")
+}
+
+fn build_http_client_for_url(url: &str, timeout: Duration) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+    if is_loopback_endpoint(url) {
+        builder = builder.no_proxy();
+    }
+    builder
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))
+}
+
 pub async fn fetch_provider_models(
     provider_cfg: &ActiveProviderConfig,
     api_key: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<String>, &'static str), String> {
     let spec = get_provider_spec(&provider_cfg.provider_id);
     let mut models: Vec<String> = spec
         .recommended_models
@@ -1032,231 +1020,37 @@ pub async fn fetch_provider_models(
         .map(|s| s.to_string())
         .collect();
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = build_http_client_for_url(&provider_cfg.api_url, Duration::from_secs(10))?;
 
-    let models_url = format!("{}/models", provider_cfg.base_url.trim_end_matches('/'));
-    let mut req = client.get(&models_url).header("Accept", "application/json");
-    if let Some(k) = api_key {
-        if !k.trim().is_empty() {
-            req = req
-                .header("Authorization", format!("Bearer {}", k.trim()))
-                .header("x-api-key", k.trim());
-        }
-    }
-
-    if let Ok(resp) = req.send().await {
-        if resp.status().is_success() {
-            if let Ok(val) = resp.json::<Value>().await {
-                let arr_opt = val
-                    .get("data")
-                    .and_then(|d| d.as_array())
-                    .or_else(|| val.get("models").and_then(|d| d.as_array()))
-                    .or_else(|| val.as_array());
-                if let Some(arr) = arr_opt {
-                    for item in arr.iter().take(120) {
-                        let id_opt = item
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| item.get("name").and_then(|v| v.as_str()))
-                            .or_else(|| item.as_str());
-                        if let Some(id_str) = id_opt {
-                            let clean = id_str.trim().to_string();
-                            if !clean.is_empty() && !models.contains(&clean) {
-                                models.push(clean);
-                            }
-                        }
-                    }
+    let mut source = "curated_catalog";
+    for models_url in derive_models_urls(provider_cfg) {
+        let live = discover_decision_models_at(&client, &models_url, api_key).await;
+        if !live.is_empty() {
+            source = "live_endpoint";
+            let mut merged = live;
+            for rec in models {
+                if !merged.contains(&rec) {
+                    merged.push(rec);
                 }
             }
+            models = merged;
+            break;
         }
     }
 
-    Ok(models)
+    Ok((models, source))
 }
 
-fn extract_json_object(raw_text: &str) -> Option<Value> {
-    let trimmed = raw_text.trim();
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        if v.is_object() {
-            return Some(v);
-        }
-    }
-    // Strip ```json ... ``` fences or locate outer {...}
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if start < end {
-            let slice = &trimmed[start..=end];
-            if let Ok(v) = serde_json::from_str::<Value>(slice) {
-                if v.is_object() {
-                    return Some(v);
-                }
-            }
-        }
-    }
-    None
-}
-
-async fn call_chat_completions_decisions(
+pub async fn call_provider_decisions(
     state: &Value,
     questions: &Value,
     api_key: &str,
     provider_cfg: &ActiveProviderConfig,
 ) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let system_prompt = "You are a calibrated scientific research relevance evaluator (TypeSafe Jev compatible). \
-Given a paper's metadata/abstract (`state`) and a dictionary of `questions`, evaluate every question key and respond ONLY with a valid JSON object (no markdown prose outside JSON). \
-The returned JSON object MUST map each question key (or inside an `\"answers\"` object) to: \
-- For `\"type\": \"noul\"` (Yes/No): `{\"noul\": <float in [0.0, 1.0] representing P(true)>, \"confidence\": <float in [0.0, 1.0]>, \"probabilities\": {\"true\": <P(true)>, \"false\": <1 - P(true)>}}`. \
-- For `\"type\": \"score\"` (Ordered rubric with K criteria levels from index 0 lowest to K-1 highest): `{\"probabilities\": [<p_0>, ..., <p_{K-1}>], \"score\": <float in [1.0, K]>, \"confidence\": <float in [0.0, 1.0]>}` where `probabilities` has exact length K and sums to 1.0.";
-
-    let user_prompt = serde_json::to_string_pretty(&json!({
-        "state": state,
-        "questions": questions,
-    }))
-    .unwrap_or_default();
-
-    let base = provider_cfg.base_url.trim_end_matches('/');
-    let is_native_anthropic = provider_cfg.provider_id == "anthropic" && !base.ends_with("/openai");
-
-    let effective_key = if api_key.trim().is_empty() {
-        "local-key"
-    } else {
-        api_key.trim()
-    };
-
-    if is_native_anthropic {
-        let url = format!("{}/messages", base);
-        let payload = json!({
-            "model": provider_cfg.model,
-            "max_tokens": 1024,
-            "temperature": 0.0,
-            "system": system_prompt,
-            "messages": [
-                { "role": "user", "content": user_prompt }
-            ]
-        });
-
-        let resp = client
-            .post(&url)
-            .header("x-api-key", effective_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("{} request error: {}", provider_cfg.provider_name, e))?;
-
-        let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(format!(
-                "{} API error ({}) for model '{}': {}",
-                provider_cfg.provider_name,
-                status.as_u16(),
-                provider_cfg.model,
-                body_text
-            ));
-        }
-        let data: Value = serde_json::from_str(&body_text)
-            .map_err(|e| format!("Invalid JSON from {}: {}", provider_cfg.provider_name, e))?;
-        let text_content = data
-            .get("content")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|item| item.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-        let parsed = extract_json_object(text_content).ok_or_else(|| {
-            format!(
-                "Could not parse structured decision JSON from {} response.",
-                provider_cfg.provider_name
-            )
-        })?;
-        if let Some(ans) = parsed.get("answers").filter(|a| a.is_object()) {
-            return Ok(ans.clone());
-        }
-        return Ok(parsed);
-    }
-
-    // Standard OpenAI-compatible `/chat/completions` endpoint (NanoGPT, OpenCode, OpenAI, Gemini, DeepSeek, Groq, Custom, etc.)
-    let url = if base.ends_with("/chat/completions") {
-        base.to_string()
-    } else {
-        format!("{}/chat/completions", base)
-    };
-
-    let payload = json!({
-        "model": provider_cfg.model,
-        "temperature": 0.0,
-        "messages": [
-            { "role": "system", "content": system_prompt },
-            { "role": "user", "content": user_prompt }
-        ]
-    });
-
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", effective_key))
-        .header("Content-Type", "application/json")
-        .header("HTTP-Referer", "http://127.0.0.1:8765")
-        .header("X-Title", "SmartRSSReader")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("{} request error: {}", provider_cfg.provider_name, e))?;
-
-    let status = resp.status();
-    let body_text = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        let mut detail = body_text.clone();
-        if let Ok(err_json) = serde_json::from_str::<Value>(&body_text) {
-            if let Some(msg) = err_json
-                .get("error")
-                .and_then(|e| e.get("message").or(Some(e)))
-                .and_then(|m| m.as_str())
-            {
-                detail = msg.to_string();
-            }
-        }
-        return Err(format!(
-            "{} API error ({}) for model '{}': {}",
-            provider_cfg.provider_name,
-            status.as_u16(),
-            provider_cfg.model,
-            detail
-        ));
-    }
-
-    let data: Value = serde_json::from_str(&body_text)
-        .map_err(|e| format!("Invalid JSON from {}: {}", provider_cfg.provider_name, e))?;
-    let content_str = data
-        .get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|msg| msg.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
-
-    let parsed = extract_json_object(content_str).ok_or_else(|| {
-        format!(
-            "Could not parse structured decision JSON from {} response: {}",
-            provider_cfg.provider_name, content_str
-        )
-    })?;
-    if let Some(ans) = parsed.get("answers").filter(|a| a.is_object()) {
-        return Ok(ans.clone());
-    }
-    Ok(parsed)
+    call_jev_decisions(state, questions, api_key, provider_cfg).await
 }
 
-pub async fn call_provider_decisions(
+pub async fn call_jev_decisions(
     state: &Value,
     questions: &Value,
     api_key: &str,
@@ -1269,120 +1063,126 @@ pub async fn call_provider_decisions(
         ));
     }
 
-    if is_jev_decisions_model(&provider_cfg.provider_id, &provider_cfg.model) {
-        return call_jev_decisions(state, questions, api_key, &provider_cfg.model).await;
+    let endpoint = provider_cfg.api_url.trim();
+    if endpoint.is_empty()
+        || (!endpoint.starts_with("http://") && !endpoint.starts_with("https://"))
+    {
+        return Err(format!(
+            "Invalid Provider Decisions API URL '{}'. Please configure a valid http:// or https:// URL in Settings.",
+            endpoint
+        ));
     }
 
-    call_chat_completions_decisions(state, questions, api_key, provider_cfg).await
-}
-
-pub async fn call_jev_decisions(
-    state: &Value,
-    questions: &Value,
-    api_key: &str,
-    model: &str,
-) -> Result<Value, String> {
-    if api_key.trim().is_empty() {
-        return Err("OpenRouter API key is missing or locked.".to_string());
+    let model = resolve_model_for_provider(&provider_cfg.provider_id, &provider_cfg.model);
+    if model.trim().is_empty() {
+        return Err("Decision model name cannot be empty. Please set a model name in Settings.".to_string());
     }
 
-    let resolved_model = resolve_model_alias(model);
-    let mut candidate_models = vec![resolved_model];
-    for &fb in FALLBACK_JEV_MODELS {
-        let fb_s = fb.to_string();
-        if !candidate_models.contains(&fb_s) {
-            candidate_models.push(fb_s);
-        }
-    }
+    let wire_format = normalize_wire_format(&provider_cfg.wire_format);
+    let is_openai_decisions = wire_format == WIRE_FORMAT_OPENAI_DECISIONS;
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let mut last_error = String::new();
-    let mut idx = 0usize;
-    while idx < candidate_models.len() {
-        let candidate = candidate_models[idx].clone();
-        let payload = json!({
-            "model": candidate,
+    let payload = if is_openai_decisions {
+        build_openai_decisions_payload(&model, state, questions)?
+    } else {
+        json!({
+            "model": model,
             "state": state,
             "questions": questions,
-        });
+        })
+    };
 
-        let resp = client
-            .post(OPENROUTER_DECISIONS_URL)
-            .header("Authorization", format!("Bearer {}", api_key.trim()))
-            .header("Content-Type", "application/json")
+    let client = build_http_client_for_url(endpoint, Duration::from_secs(30))?;
+
+    let mut req = client
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .json(&payload);
+
+    // Attach OpenRouter identification headers only for OpenRouter so strict gateways never reject unknown headers
+    if endpoint.contains("openrouter.ai") {
+        req = req
             .header("HTTP-Referer", "http://127.0.0.1:8765")
-            .header("X-Title", "SmartRSSReader")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("OpenRouter request error: {}", e))?;
-
-        let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
-
-        if status.is_success() {
-            let data: Value = serde_json::from_str(&body_text).map_err(|_| {
-                "Unexpected response format from OpenRouter Decisions API.".to_string()
-            })?;
-            if let Some(answers) = data.get("answers") {
-                if answers.is_object() {
-                    return Ok(answers.clone());
-                }
-            }
-            if data.is_object() {
-                return Ok(data);
-            }
-            return Err("Unexpected response format from OpenRouter Decisions API.".to_string());
-        }
-
-        let mut detail = body_text.clone();
-        if let Ok(err_json) = serde_json::from_str::<Value>(&body_text) {
-            if let Some(msg) = err_json
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-            {
-                detail = msg.to_string();
-            }
-        }
-        last_error = format!(
-            "OpenRouter Decisions API error ({}) for model '{}': {}",
-            status.as_u16(),
-            candidate,
-            detail
-        );
-
-        let lower_detail = detail.to_lowercase();
-        let is_model_err = [
-            "not a valid model",
-            "does not exist",
-            "no endpoints found",
-            "model not found",
-            "invalid model",
-        ]
-        .iter()
-        .any(|tok| lower_detail.contains(tok));
-
-        if !is_model_err {
-            return Err(last_error);
-        }
-
-        if idx == 0 {
-            let live_models = discover_openrouter_decision_models(&client).await;
-            for lm in live_models {
-                if !candidate_models.contains(&lm) {
-                    candidate_models.push(lm);
-                }
-            }
-        }
-        idx += 1;
+            .header("X-Title", "SmartRSSReader");
     }
 
-    Err(last_error)
+    if !api_key.trim().is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", api_key.trim()));
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("{} request error ({}): {}", provider_cfg.provider_name, endpoint, e))?;
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap_or_default();
+
+    if status.is_success() {
+        let data: Value = serde_json::from_str(&body_text).map_err(|_| {
+            format!(
+                "Unexpected non-JSON response from {} ({}).",
+                provider_cfg.provider_name, endpoint
+            )
+        })?;
+        return extract_answers_map_from_response(&data, is_openai_decisions);
+    }
+
+    let mut detail = body_text.clone();
+    if let Ok(err_json) = serde_json::from_str::<Value>(&body_text) {
+        if let Some(msg) = err_json
+            .get("error")
+            .and_then(|e| e.get("message").or(Some(e)))
+            .and_then(|m| m.as_str())
+        {
+            detail = msg.to_string();
+        }
+    }
+
+    let lower_detail = detail.to_lowercase();
+    let is_model_err = [
+        "not a valid model",
+        "does not exist",
+        "no endpoints found",
+        "model not found",
+        "invalid model",
+        "unknown model",
+    ]
+    .iter()
+    .any(|tok| lower_detail.contains(tok));
+
+    let mut err_msg = format!(
+        "{} API error ({}) at '{}' for model '{}': {}",
+        provider_cfg.provider_name,
+        status.as_u16(),
+        endpoint,
+        model,
+        detail
+    );
+
+    if is_model_err {
+        for models_url in derive_models_urls(provider_cfg) {
+            let live_models = discover_decision_models_at(
+                &client,
+                &models_url,
+                if api_key.trim().is_empty() {
+                    None
+                } else {
+                    Some(api_key)
+                },
+            )
+            .await;
+            if !live_models.is_empty() {
+                let preview: Vec<String> = live_models.into_iter().take(6).collect();
+                err_msg.push_str(&format!(
+                    " (Available decision models reported by endpoint: {})",
+                    preview.join(", ")
+                ));
+                break;
+            }
+        }
+    }
+
+    Err(err_msg)
 }
 
 pub async fn evaluate_entry_queries_with_provider(
@@ -1446,6 +1246,10 @@ pub async fn evaluate_entry_queries(
 ) -> Result<HashMap<i64, Value>, String> {
     let mut settings = HashMap::new();
     settings.insert("ai_provider".to_string(), "openrouter".to_string());
+    settings.insert(
+        "provider_api_url".to_string(),
+        OPENROUTER_DECISIONS_URL.to_string(),
+    );
     settings.insert("jev_model".to_string(), model.to_string());
     let cfg = resolve_active_provider_config(&settings);
     evaluate_entry_queries_with_provider(entry, queries, api_key, &cfg).await
@@ -1461,6 +1265,26 @@ pub async fn test_single_query_with_provider(
     let q_spec = build_question_spec(query)?;
     let key = "test_query";
     let questions = json!({ key: q_spec });
+
+    let wire_format = normalize_wire_format(&provider_cfg.wire_format);
+    let request_preview = if wire_format == WIRE_FORMAT_OPENAI_DECISIONS {
+        let mut p = build_openai_decisions_payload(&provider_cfg.model, &state, &questions)?;
+        if let Some(obj) = p.as_object_mut() {
+            obj.insert("provider".to_string(), json!(provider_cfg.provider_id));
+            obj.insert("api_url".to_string(), json!(provider_cfg.api_url));
+            obj.insert("wire_format".to_string(), json!(wire_format));
+        }
+        p
+    } else {
+        json!({
+            "provider": provider_cfg.provider_id,
+            "api_url": provider_cfg.api_url,
+            "wire_format": wire_format,
+            "model": provider_cfg.model,
+            "state": state,
+            "questions": questions,
+        })
+    };
 
     let answers = call_provider_decisions(&state, &questions, api_key, provider_cfg).await?;
     let qtype = query
@@ -1487,6 +1311,8 @@ pub async fn test_single_query_with_provider(
     Ok(json!({
         "provider_id": provider_cfg.provider_id,
         "provider_name": provider_cfg.provider_name,
+        "api_url": provider_cfg.api_url,
+        "wire_format": wire_format,
         "model": provider_cfg.model,
         "query_name": query.get("name").and_then(|v| v.as_str()).unwrap_or("Test Query"),
         "query_type": qtype,
@@ -1495,13 +1321,7 @@ pub async fn test_single_query_with_provider(
         "weighted_contribution": weighted_contrib,
         "display_value": norm_info.get("display_value").cloned().unwrap_or(Value::Null),
         "raw_response": norm_info.get("raw_response").cloned().unwrap_or(Value::Null),
-        "request_preview": {
-            "provider": provider_cfg.provider_id,
-            "base_url": provider_cfg.base_url,
-            "model": provider_cfg.model,
-            "state": state,
-            "questions": questions,
-        }
+        "request_preview": request_preview,
     }))
 }
 
@@ -1513,6 +1333,10 @@ pub async fn test_single_query_on_entry(
 ) -> Result<Value, String> {
     let mut settings = HashMap::new();
     settings.insert("ai_provider".to_string(), "openrouter".to_string());
+    settings.insert(
+        "provider_api_url".to_string(),
+        OPENROUTER_DECISIONS_URL.to_string(),
+    );
     settings.insert("jev_model".to_string(), model.to_string());
     let cfg = resolve_active_provider_config(&settings);
     test_single_query_with_provider(entry, query, api_key, &cfg).await

@@ -79,3 +79,5 @@ To quickly tune a positive or negative weight on an existing query by `--name` (
 After creating, updating, or re-weighting a query:
 1. Check the JSON response returned by `queries set` or `queries weight`—it includes `top_active_entries_preview` showing the updated top 5 ranked papers.
 2. Or run `./smart-rss entries list --limit 5` to inspect the full ranked list.
+
+> **Tip:** To export or import all Jev filter rules together with RSS feeds as a readable TOML file, see the `import-export-config` skill (`./smart-rss config export` / `./smart-rss config import`).

@@ -35,19 +35,22 @@ Whenever the user provides a journal name or RSS URL, test it first to verify th
 - **APS Physics**: `https://feeds.aps.org/rss/recent/<journal>.xml` (e.g., `prl.xml`, `prx.xml`, `pre.xml`)
 - **PNAS**: `https://www.pnas.org/action/showFeed?type=etoc&feed=rss&jc=pnas`
 
-## 3. Add or Update (Upsert) a Feed
+## 3. Add or Update (Upsert) a Feed (with Category & Tags)
 
-Use `feeds add` to idempotently add or update a feed by its URL. Pass `--test` to validate the feed before saving (and omit `--title` if you want the title auto-detected from the RSS XML):
+Use `feeds add` to idempotently add or update a feed by its URL. Pass `--test` to validate the feed before saving (and omit `--title` if you want the title auto-detected from the RSS XML). You can also attach searchable `--tags` (space- or comma-separated):
 
 ```bash
 ./smart-rss feeds add \
   --url "https://www.nature.com/neuro.rss" \
   --title "Nature Neuroscience" \
   --category "Neuroscience" \
+  --tags "neuroscience" "peer-reviewed" \
   --test
 ```
 
 To disable a feed without deleting it, pass `--disabled`.
+
+> **Tip:** To bulk-export or bulk-import your entire feed list (including names, categories, and tags) alongside filter rules as a human-readable TOML file, use the `import-export-config` skill (`./smart-rss config export` / `./smart-rss config import`).
 
 ## 4. Remove a Feed
 

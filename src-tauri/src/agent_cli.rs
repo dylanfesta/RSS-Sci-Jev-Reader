@@ -1,10 +1,16 @@
+use crate::config_toml::{
+    apply_toml_import, export_to_toml_string, preview_toml_import, ImportApplyOptions,
+};
 use crate::database::Database;
-use crate::jev_client::{get_provider_spec, list_providers_json, resolve_active_provider_config};
+use crate::jev_client::{
+    get_provider_spec, list_providers_json, normalize_wire_format, resolve_active_provider_config,
+};
 use crate::rss_service::fetch_and_parse_feed;
-use crate::skills_provisioner::WorkspaceManager;
+use crate::skills_provisioner::{expand_tilde, WorkspaceManager};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 pub struct AgentAPI {
@@ -49,6 +55,7 @@ impl AgentAPI {
         url: &str,
         title: Option<&str>,
         category: Option<&str>,
+        tags: Option<&[String]>,
         enabled: Option<bool>,
         validate_first: bool,
     ) -> Result<Value, String> {
@@ -70,7 +77,7 @@ impl AgentAPI {
 
         let feed = self
             .db
-            .upsert_feed(&resolved_title, url, category, enabled)?;
+            .upsert_feed(&resolved_title, url, category, tags, enabled)?;
 
         let mut res = json!({ "feed": feed });
         if let Some(p) = preview_info {
@@ -191,7 +198,7 @@ impl AgentAPI {
 #[derive(Parser, Debug)]
 #[command(
     name = "smart-rss",
-    about = "SmartRSSReader Agent CLI — Manage RSS feeds, Jev queries, and ranked entries"
+    about = "SmartRSSReader Agent CLI — Manage RSS feeds, Jev queries, TOML configs, and ranked entries"
 )]
 pub struct CliArgs {
     #[arg(long = "data-dir")]
@@ -213,6 +220,11 @@ pub enum CliResource {
         #[command(subcommand)]
         action: QueriesAction,
     },
+    /// Export or import RSS feeds (including tags) and Jev filter rules as human-readable TOML
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Inspect ranked active or archived entries
     Entries {
         #[command(subcommand)]
@@ -223,7 +235,7 @@ pub enum CliResource {
         #[command(subcommand)]
         action: WorkspaceAction,
     },
-    /// List or configure AI providers (OpenRouter, NanoGPT, OpenCode, OpenAI, Anthropic, Gemini, Custom, etc.)
+    /// List or configure Jev provider API URL and model name
     Providers {
         #[command(subcommand)]
         action: ProvidersAction,
@@ -242,6 +254,9 @@ pub enum FeedsAction {
         title: Option<String>,
         #[arg(long, default_value = "General")]
         category: String,
+        /// Optional tags (space- or comma-separated, e.g. --tags preprint neuroscience)
+        #[arg(long, num_args = 1..)]
+        tags: Option<Vec<String>>,
         #[arg(long)]
         disabled: bool,
         #[arg(long)]
@@ -309,6 +324,37 @@ pub enum QueriesAction {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Export RSS feeds (with name, category, tags) and Jev filter rules to a human-readable TOML file
+    Export {
+        /// Output TOML file path (defaults to <data_dir>/smart_rss_config.toml)
+        #[arg(long, short = 'o', alias = "output")]
+        file: Option<PathBuf>,
+        /// Print raw TOML directly to stdout instead of writing a file
+        #[arg(long)]
+        stdout: bool,
+    },
+    /// Import RSS feeds and Jev filter rules from a TOML file with conflict detection
+    Import {
+        /// Path to the TOML configuration file
+        #[arg(long, short = 'i', alias = "input")]
+        file: PathBuf,
+        /// Validate and report new vs. conflicting items without modifying the database
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Conflict policy: ask (default), override-all, skip-existing, or abort
+        #[arg(long = "on-conflict", default_value = "ask")]
+        on_conflict: String,
+        /// Specific conflicting feed URLs to override (case-insensitive)
+        #[arg(long = "override-feeds", num_args = 1..)]
+        override_feeds: Vec<String>,
+        /// Specific conflicting filter rule names to override (case-insensitive)
+        #[arg(long = "override-rules", num_args = 1..)]
+        override_rules: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum EntriesAction {
     /// List ranked entries as JSON
     List {
@@ -335,21 +381,64 @@ pub enum WorkspaceAction {
 
 #[derive(Subcommand, Debug)]
 pub enum ProvidersAction {
-    /// List all available AI providers and the active provider configuration
+    /// List all Decision/SystemOne provider presets and the active endpoint + model configuration
     List,
-    /// Switch active AI provider or configure custom provider Base URL, Portal link, and Model
+    /// Configure Decision provider preset, API URL, wire format, and model name
     Set {
+        /// Provider preset: openrouter, nanogpt, ofox, typesafe, perplexity, openai-decisions, local-decider, litellm, or custom
         #[arg(long)]
-        provider: String,
+        provider: Option<String>,
+        /// Decision model name (e.g. typesafe/jev-1.14, jev-latest, cloudflare/clef, pplx-decider-latest, gpt-6-luna)
         #[arg(long)]
         model: Option<String>,
-        #[arg(long = "base-url")]
-        base_url: Option<String>,
+        /// Provider Decisions API URL (e.g. https://api.nano-gpt.com/api/v1/systemone)
+        #[arg(long = "api-url", alias = "base-url")]
+        api_url: Option<String>,
+        /// Wire protocol: systemone (Jev/Clef/Decider) or openai_decisions (gpt-6-luna)
+        #[arg(long = "wire-format")]
+        wire_format: Option<String>,
+        /// Optional portal/dashboard URL for API keys
         #[arg(long = "portal-url")]
         portal_url: Option<String>,
+        /// Optional display name for a custom endpoint
         #[arg(long = "custom-name")]
         custom_name: Option<String>,
     },
+}
+
+enum PromptChoice {
+    Yes,
+    No,
+    All,
+    Cancel,
+}
+
+fn prompt_conflict_tty(label: &str, details: &str) -> Result<PromptChoice, String> {
+    let mut stderr = io::stderr();
+    loop {
+        writeln!(stderr, "\nConflict: {}", label).map_err(|e| e.to_string())?;
+        writeln!(stderr, "  {}", details).map_err(|e| e.to_string())?;
+        write!(
+            stderr,
+            "Override existing item? [y]es / [n]o / [a]ll (override all) / [c]ancel: "
+        )
+        .map_err(|e| e.to_string())?;
+        stderr.flush().map_err(|e| e.to_string())?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| format!("Failed reading input: {}", e))?;
+        match input.trim().to_lowercase().as_str() {
+            "y" | "yes" => return Ok(PromptChoice::Yes),
+            "n" | "no" => return Ok(PromptChoice::No),
+            "a" | "all" | "override-all" => return Ok(PromptChoice::All),
+            "c" | "cancel" | "q" | "quit" => return Ok(PromptChoice::Cancel),
+            _ => {
+                writeln!(stderr, "Please enter y, n, a, or c.").map_err(|e| e.to_string())?;
+            }
+        }
+    }
 }
 
 pub async fn execute_cli_resource(
@@ -365,13 +454,16 @@ pub async fn execute_cli_resource(
                 url,
                 title,
                 category,
+                tags,
                 disabled,
                 test,
             } => {
+                let norm_tags = tags.map(|t| Database::normalize_tags(&t));
                 api.upsert_feed(
                     &url,
                     title.as_deref(),
                     Some(&category),
+                    norm_tags.as_deref(),
                     Some(!disabled),
                     test,
                 )
@@ -431,6 +523,206 @@ pub async fn execute_cli_resource(
             }
             QueriesAction::Remove { id, name } => api.remove_query(id, name.as_deref()),
         },
+        CliResource::Config { action } => match action {
+            ConfigAction::Export { file, stdout } => {
+                let (toml_text, feeds_count, rules_count) = export_to_toml_string(&api.db)?;
+                if stdout {
+                    return Ok(json!({
+                        "__raw_stdout__": toml_text,
+                        "feeds_count": feeds_count,
+                        "rules_count": rules_count,
+                    }));
+                }
+                let target_path = match file {
+                    Some(p) => expand_tilde(&p.to_string_lossy()),
+                    None => api
+                        .workspace
+                        .get_data_dir()
+                        .join("smart_rss_config.toml"),
+                };
+                if let Some(parent) = target_path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create directory: {}", e))?;
+                    }
+                }
+                std::fs::write(&target_path, &toml_text).map_err(|e| {
+                    format!("Failed to write TOML file '{}': {}", target_path.display(), e)
+                })?;
+                Ok(json!({
+                    "exported": true,
+                    "path": target_path.to_string_lossy(),
+                    "feeds_count": feeds_count,
+                    "rules_count": rules_count,
+                }))
+            }
+            ConfigAction::Import {
+                file,
+                dry_run,
+                on_conflict,
+                override_feeds,
+                override_rules,
+            } => {
+                let resolved_path = expand_tilde(&file.to_string_lossy());
+                let raw_toml = std::fs::read_to_string(&resolved_path).map_err(|e| {
+                    format!("Failed to read TOML file '{}': {}", resolved_path.display(), e)
+                })?;
+
+                let preview = preview_toml_import(&api.db, &raw_toml)?;
+                if dry_run {
+                    return Ok(json!({
+                        "dry_run": true,
+                        "applied": false,
+                        "path": resolved_path.to_string_lossy(),
+                        "preview": preview,
+                    }));
+                }
+
+                let policy = on_conflict.trim().to_lowercase();
+                if !matches!(
+                    policy.as_str(),
+                    "ask" | "override-all" | "skip-existing" | "abort"
+                ) {
+                    return Err(format!(
+                        "Invalid --on-conflict value '{}'. Use: ask, override-all, skip-existing, or abort.",
+                        on_conflict
+                    ));
+                }
+
+                let mut opts = ImportApplyOptions {
+                    override_all: policy == "override-all",
+                    override_feed_urls: override_feeds
+                        .iter()
+                        .map(|s| s.trim().to_lowercase())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                    override_rule_names: override_rules
+                        .iter()
+                        .map(|s| s.trim().to_lowercase())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                };
+
+                if preview.has_conflicts {
+                    match policy.as_str() {
+                        "override-all" | "skip-existing" => {}
+                        "abort" => {
+                            return Ok(json!({
+                                "status": "cancelled",
+                                "applied": false,
+                                "message": format!(
+                                    "Import cancelled: {} conflicting item(s) found and --on-conflict abort was set.",
+                                    preview.conflict_count
+                                ),
+                                "preview": preview,
+                            }));
+                        }
+                        "ask" => {
+                            let has_explicit_overrides = !opts.override_feed_urls.is_empty()
+                                || !opts.override_rule_names.is_empty();
+                            if !has_explicit_overrides {
+                                if io::stdin().is_terminal() {
+                                    let mut override_all = false;
+                                    let mut chosen_feeds = HashSet::new();
+                                    let mut chosen_rules = HashSet::new();
+
+                                    for fc in &preview.conflicting_feeds {
+                                        if override_all {
+                                            break;
+                                        }
+                                        let existing_title = fc.existing["title"]
+                                            .as_str()
+                                            .unwrap_or("");
+                                        let label = format!(
+                                            "RSS Feed '{}' ({})",
+                                            fc.incoming.name, fc.incoming.url
+                                        );
+                                        let details = format!(
+                                            "Existing: title='{}', category='{}', tags={:?}  -->  Incoming: title='{}', category='{}', tags={:?}",
+                                            existing_title,
+                                            fc.existing["category"].as_str().unwrap_or("General"),
+                                            fc.existing["tags"],
+                                            fc.incoming.name,
+                                            fc.incoming.category,
+                                            fc.incoming.tags
+                                        );
+                                        match prompt_conflict_tty(&label, &details)? {
+                                            PromptChoice::Yes => {
+                                                chosen_feeds.insert(fc.key.clone());
+                                            }
+                                            PromptChoice::No => {}
+                                            PromptChoice::All => {
+                                                override_all = true;
+                                            }
+                                            PromptChoice::Cancel => {
+                                                return Ok(json!({
+                                                    "status": "cancelled",
+                                                    "applied": false,
+                                                    "message": "Import cancelled by user. No changes were made.",
+                                                }));
+                                            }
+                                        }
+                                    }
+
+                                    for rc in &preview.conflicting_rules {
+                                        if override_all {
+                                            break;
+                                        }
+                                        let label = format!("Filter Rule '{}'", rc.incoming.name);
+                                        let details = format!(
+                                            "Existing: type='{}', weight={}  -->  Incoming: type='{}', weight={}",
+                                            rc.existing["query_type"].as_str().unwrap_or("noul"),
+                                            rc.existing["weight"],
+                                            rc.incoming.query_type,
+                                            rc.incoming.weight
+                                        );
+                                        match prompt_conflict_tty(&label, &details)? {
+                                            PromptChoice::Yes => {
+                                                chosen_rules.insert(rc.key.clone());
+                                            }
+                                            PromptChoice::No => {}
+                                            PromptChoice::All => {
+                                                override_all = true;
+                                            }
+                                            PromptChoice::Cancel => {
+                                                return Ok(json!({
+                                                    "status": "cancelled",
+                                                    "applied": false,
+                                                    "message": "Import cancelled by user. No changes were made.",
+                                                }));
+                                            }
+                                        }
+                                    }
+
+                                    opts.override_all = override_all;
+                                    opts.override_feed_urls = chosen_feeds;
+                                    opts.override_rule_names = chosen_rules;
+                                } else {
+                                    return Ok(json!({
+                                        "status": "conflicts_detected",
+                                        "applied": false,
+                                        "path": resolved_path.to_string_lossy(),
+                                        "message": "Existing feeds or filter rules conflict with the TOML file. Ask the user whether to override (Yes/No per item, Override All, or Cancel), then re-run with --on-conflict override-all, --on-conflict skip-existing, or --override-feeds / --override-rules.",
+                                        "preview": preview,
+                                    }));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                let summary = apply_toml_import(&api.db, &raw_toml, &opts)?;
+                let counts = api.db.get_counts()?;
+                Ok(json!({
+                    "status": "imported",
+                    "applied": true,
+                    "path": resolved_path.to_string_lossy(),
+                    "summary": summary,
+                    "counts": counts,
+                }))
+            }
+        },
         CliResource::Entries { action } => match action {
             EntriesAction::List {
                 status,
@@ -463,34 +755,73 @@ pub async fn execute_cli_resource(
             ProvidersAction::Set {
                 provider,
                 model,
-                base_url,
+                api_url,
+                wire_format,
                 portal_url,
                 custom_name,
             } => {
-                let pid = provider.trim().to_lowercase();
-                let spec = get_provider_spec(&pid);
+                let current_settings = api.db.get_settings()?;
+                let current_pid = current_settings
+                    .get("ai_provider")
+                    .cloned()
+                    .unwrap_or_else(|| "openrouter".to_string());
+                let provider_changed = provider.is_some();
+                let target_pid = provider
+                    .as_deref()
+                    .map(|p| get_provider_spec(p).id.to_string())
+                    .unwrap_or(current_pid);
+                let spec = get_provider_spec(&target_pid);
+
                 let mut updates = HashMap::new();
                 updates.insert("ai_provider".to_string(), spec.id.to_string());
-                let resolved_model = model
-                    .map(|m| m.trim().to_string())
-                    .filter(|m| !m.is_empty())
-                    .unwrap_or_else(|| spec.default_model.to_string());
-                updates.insert("jev_model".to_string(), resolved_model);
-                if let Some(bu) = base_url {
-                    updates.insert("custom_base_url".to_string(), bu.trim().to_string());
-                } else if spec.id != "custom" {
-                    updates.insert("custom_base_url".to_string(), String::new());
+
+                if let Some(m) = model {
+                    let clean = m.trim();
+                    if clean.is_empty() {
+                        return Err("Decision model name cannot be empty.".to_string());
+                    }
+                    updates.insert("jev_model".to_string(), clean.to_string());
+                } else if provider_changed {
+                    updates.insert("jev_model".to_string(), spec.default_model.to_string());
                 }
+
+                if let Some(url) = api_url {
+                    let clean = url.trim();
+                    if !clean.starts_with("http://") && !clean.starts_with("https://") {
+                        return Err(
+                            "Provider Decisions API URL must start with http:// or https://."
+                                .to_string(),
+                        );
+                    }
+                    updates.insert("provider_api_url".to_string(), clean.to_string());
+                } else if provider_changed && spec.id != "custom" {
+                    updates.insert("provider_api_url".to_string(), spec.api_url.to_string());
+                }
+
+                if let Some(wf) = wire_format {
+                    updates.insert(
+                        "provider_wire_format".to_string(),
+                        normalize_wire_format(&wf).to_string(),
+                    );
+                } else if provider_changed {
+                    updates.insert(
+                        "provider_wire_format".to_string(),
+                        spec.wire_format.to_string(),
+                    );
+                }
+
                 if let Some(pu) = portal_url {
                     updates.insert("custom_portal_url".to_string(), pu.trim().to_string());
-                } else if spec.id != "custom" {
+                } else if provider_changed && spec.id != "custom" {
                     updates.insert("custom_portal_url".to_string(), String::new());
                 }
+
                 if let Some(cn) = custom_name {
                     updates.insert("custom_provider_name".to_string(), cn.trim().to_string());
-                } else if spec.id != "custom" {
+                } else if provider_changed && spec.id != "custom" {
                     updates.insert("custom_provider_name".to_string(), String::new());
                 }
+
                 let updated_settings = api.db.update_settings(&updates)?;
                 let active = resolve_active_provider_config(&updated_settings);
                 Ok(json!({
@@ -512,10 +843,14 @@ pub fn run_agent_cli_from_args(args: CliArgs) -> i32 {
         .expect("Failed to initialize Tokio runtime");
     match rt.block_on(execute_cli_resource(resource, args.data_dir)) {
         Ok(val) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
-            );
+            if let Some(raw) = val.get("__raw_stdout__").and_then(|v| v.as_str()) {
+                print!("{}", raw);
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
+                );
+            }
             0
         }
         Err(err) => {

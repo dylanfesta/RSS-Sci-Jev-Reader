@@ -108,6 +108,7 @@ impl Database {
                 title TEXT NOT NULL,
                 url TEXT NOT NULL UNIQUE,
                 category TEXT NOT NULL DEFAULT 'General',
+                tags_json TEXT NOT NULL DEFAULT '[]',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_fetched_at TEXT,
                 last_error TEXT,
@@ -165,16 +166,21 @@ impl Database {
         )?;
 
         self.migrate_entries_if_needed(&conn)?;
+        self.migrate_feeds_if_needed(&conn)?;
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_provider', 'openrouter')",
             &[],
         )?;
         conn.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('jev_model', 'typesafe/jev-1.14')",
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('provider_api_url', 'https://openrouter.ai/api/alpha/decisions')",
             &[],
         )?;
         conn.execute(
-            "UPDATE settings SET value = 'typesafe/jev-1.14' WHERE key = 'jev_model' AND value IN ('typesafe/jev-latest', 'jev-latest')",
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('provider_wire_format', 'systemone')",
+            &[],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('jev_model', 'typesafe/jev-1.14')",
             &[],
         )?;
         conn.execute(
@@ -193,6 +199,98 @@ impl Database {
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('max_entries_per_feed', '25')",
             &[],
         )?;
+        self.migrate_provider_settings_if_needed(&conn)?;
+        Ok(())
+    }
+
+    fn migrate_feeds_if_needed(&self, conn: &SqliteConn) -> Result<(), String> {
+        let cols = conn.query_rows("PRAGMA table_info(feeds)", &[])?;
+        let has_tags_json = cols.iter().any(|r| val_str(r, "name") == "tags_json");
+        if !has_tags_json {
+            conn.execute(
+                "ALTER TABLE feeds ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+                &[],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn migrate_provider_settings_if_needed(&self, conn: &SqliteConn) -> Result<(), String> {
+        let rows = conn.query_rows("SELECT key, value FROM settings", &[])?;
+        let mut map = HashMap::new();
+        for r in rows {
+            map.insert(val_str(&r, "key"), val_str(&r, "value"));
+        }
+
+        let raw_provider = map
+            .get("ai_provider")
+            .map(|s| s.trim().to_lowercase())
+            .unwrap_or_else(|| "openrouter".to_string());
+        let custom_base = map
+            .get("custom_base_url")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let current_api_url = map
+            .get("provider_api_url")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        // Map legacy 'openai' -> 'openai-decisions', keep any valid Decision provider ID, and normalize removed chat-only IDs
+        let effective_provider = if raw_provider == "openai" {
+            "openai-decisions".to_string()
+        } else if crate::jev_client::is_valid_provider_id(&raw_provider) {
+            raw_provider.clone()
+        } else if !custom_base.is_empty() {
+            "custom".to_string()
+        } else {
+            "openrouter".to_string()
+        };
+
+        if effective_provider != raw_provider {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('ai_provider', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                &[effective_provider.as_str().into()],
+            )?;
+        }
+
+        let spec = crate::jev_client::get_provider_spec(&effective_provider);
+
+        // Migrate legacy chat base URLs (e.g. .../api/v1) to the provider's native Decisions/SystemOne URL
+        let is_legacy_chat_url = matches!(
+            current_api_url.trim_end_matches('/'),
+            "" | "https://openrouter.ai/api/v1" | "https://nano-gpt.com/api/v1" | "https://api.openai.com/v1" | "https://api.perplexity.ai"
+        );
+        if is_legacy_chat_url {
+            let next_url = if !custom_base.is_empty()
+                && !matches!(
+                    custom_base.trim_end_matches('/'),
+                    "https://openrouter.ai/api/v1" | "https://nano-gpt.com/api/v1" | "https://api.openai.com/v1" | "https://api.perplexity.ai"
+                ) {
+                custom_base.as_str()
+            } else {
+                spec.api_url
+            };
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('provider_api_url', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                &[next_url.into()],
+            )?;
+        }
+
+        // If an old DB had a non-decision chat model stored (e.g. gpt-4o-mini on nanogpt), reset to spec.default_model
+        let current_model = map
+            .get("jev_model")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if matches!(
+            current_model.as_str(),
+            "" | "gpt-4o-mini" | "deepseek-chat" | "sonar"
+        ) {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('jev_model', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                &[spec.default_model.into()],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -330,12 +428,50 @@ impl Database {
     }
 
     // --- Feeds ---
+    pub fn normalize_tags(raw: &[String]) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for item in raw {
+            for part in item.split(',') {
+                let clean = part.trim();
+                if clean.is_empty() {
+                    continue;
+                }
+                let lower = clean.to_lowercase();
+                if seen.insert(lower) {
+                    out.push(clean.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    pub fn parse_tags_from_value(val: &Value) -> Option<Vec<String>> {
+        if let Some(arr) = val.as_array() {
+            let raw: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+            Some(Self::normalize_tags(&raw))
+        } else if let Some(s) = val.as_str() {
+            Some(Self::normalize_tags(&[s.to_string()]))
+        } else {
+            None
+        }
+    }
+
     fn row_to_feed(row: &HashMap<String, Value>) -> Value {
+        let tags_raw = val_str(row, "tags_json");
+        let tags: Vec<String> = serde_json::from_str::<Vec<String>>(&tags_raw)
+            .map(|v| Self::normalize_tags(&v))
+            .unwrap_or_default();
+
         let mut m = Map::new();
         m.insert("id".to_string(), json!(val_i64(row, "id")));
         m.insert("title".to_string(), json!(val_str(row, "title")));
         m.insert("url".to_string(), json!(val_str(row, "url")));
         m.insert("category".to_string(), json!(val_str(row, "category")));
+        m.insert("tags".to_string(), json!(tags));
         m.insert("enabled".to_string(), json!(val_i64(row, "enabled") != 0));
         m.insert(
             "last_fetched_at".to_string(),
@@ -409,19 +545,33 @@ impl Database {
         category: &str,
         enabled: bool,
     ) -> Result<Value, String> {
+        self.create_feed_with_tags(title, url, category, &[], enabled)
+    }
+
+    pub fn create_feed_with_tags(
+        &self,
+        title: &str,
+        url: &str,
+        category: &str,
+        tags: &[String],
+        enabled: bool,
+    ) -> Result<Value, String> {
         let now = utc_now_iso();
         let cat = if category.trim().is_empty() {
             "General"
         } else {
             category.trim()
         };
+        let clean_tags = Self::normalize_tags(tags);
+        let tags_json = serde_json::to_string(&clean_tags).unwrap_or_else(|_| "[]".to_string());
         let conn = self.connect()?;
         let feed_id = conn.insert(
-            "INSERT INTO feeds (title, url, category, enabled, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO feeds (title, url, category, tags_json, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             &[
                 title.trim().into(),
                 url.trim().into(),
                 cat.into(),
+                tags_json.into(),
                 (if enabled { 1i64 } else { 0i64 }).into(),
                 now.into(),
             ],
@@ -436,6 +586,7 @@ impl Database {
         title: Option<&str>,
         url: Option<&str>,
         category: Option<&str>,
+        tags: Option<&[String]>,
         enabled: Option<bool>,
     ) -> Result<Option<Value>, String> {
         let existing = match self.get_feed(feed_id)? {
@@ -449,8 +600,27 @@ impl Database {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| existing["url"].as_str().unwrap_or("").to_string());
         let new_cat = category
-            .map(|s| s.trim().to_string())
+            .map(|s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    "General".to_string()
+                } else {
+                    t.to_string()
+                }
+            })
             .unwrap_or_else(|| existing["category"].as_str().unwrap_or("General").to_string());
+        let new_tags: Vec<String> = match tags {
+            Some(t) => Self::normalize_tags(t),
+            None => existing["tags"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        let new_tags_json = serde_json::to_string(&new_tags).unwrap_or_else(|_| "[]".to_string());
         let new_enabled = enabled
             .map(|b| if b { 1i64 } else { 0i64 })
             .unwrap_or_else(|| {
@@ -463,11 +633,12 @@ impl Database {
 
         let conn = self.connect()?;
         conn.execute(
-            "UPDATE feeds SET title = ?, url = ?, category = ?, enabled = ? WHERE id = ?",
+            "UPDATE feeds SET title = ?, url = ?, category = ?, tags_json = ?, enabled = ? WHERE id = ?",
             &[
                 new_title.into(),
                 new_url.into(),
                 new_cat.into(),
+                new_tags_json.into(),
                 new_enabled.into(),
                 feed_id.into(),
             ],
@@ -480,6 +651,7 @@ impl Database {
         title: &str,
         url: &str,
         category: Option<&str>,
+        tags: Option<&[String]>,
         enabled: Option<bool>,
     ) -> Result<Value, String> {
         if let Some(existing) = self.get_feed_by_url(url)? {
@@ -490,16 +662,17 @@ impl Database {
                 Some(title.trim())
             };
             if let Some(updated) =
-                self.update_feed(feed_id, title_opt, Some(url), category, enabled)?
+                self.update_feed(feed_id, title_opt, Some(url), category, tags, enabled)?
             {
                 return Ok(updated);
             }
             return Ok(existing);
         }
-        self.create_feed(
+        self.create_feed_with_tags(
             title,
             url,
             category.unwrap_or("General"),
+            tags.unwrap_or(&[]),
             enabled.unwrap_or(true),
         )
     }

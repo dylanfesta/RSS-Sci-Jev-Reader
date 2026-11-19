@@ -7,6 +7,8 @@ const EMBEDDED_MANAGE_FEEDS_SKILL: &str =
     include_str!("../../.agents/skills/manage-rss-feeds/SKILL.md");
 const EMBEDDED_MANAGE_QUERIES_SKILL: &str =
     include_str!("../../.agents/skills/manage-jev-queries/SKILL.md");
+const EMBEDDED_IMPORT_EXPORT_SKILL: &str =
+    include_str!("../../.agents/skills/import-export-config/SKILL.md");
 
 #[derive(Clone)]
 pub struct WorkspaceManager {
@@ -134,9 +136,15 @@ impl WorkspaceManager {
 
         let feeds_skill_dir = dir.join(".agents").join("skills").join("manage-rss-feeds");
         let queries_skill_dir = dir.join(".agents").join("skills").join("manage-jev-queries");
+        let import_export_skill_dir = dir
+            .join(".agents")
+            .join("skills")
+            .join("import-export-config");
         std::fs::create_dir_all(&feeds_skill_dir)
             .map_err(|e| format!("Failed to create skill dir: {}", e))?;
         std::fs::create_dir_all(&queries_skill_dir)
+            .map_err(|e| format!("Failed to create skill dir: {}", e))?;
+        std::fs::create_dir_all(&import_export_skill_dir)
             .map_err(|e| format!("Failed to create skill dir: {}", e))?;
 
         // Write AGENTS.md, GEMINI.md, CLAUDE.md
@@ -157,6 +165,11 @@ impl WorkspaceManager {
             EMBEDDED_MANAGE_QUERIES_SKILL,
         )
         .map_err(|e| format!("Failed to write manage-jev-queries/SKILL.md: {}", e))?;
+        std::fs::write(
+            import_export_skill_dir.join("SKILL.md"),
+            EMBEDDED_IMPORT_EXPORT_SKILL,
+        )
+        .map_err(|e| format!("Failed to write import-export-config/SKILL.md: {}", e))?;
 
         // Write local CLI wrapper scripts (`./smart-rss` and `smart-rss.cmd`)
         let exe_path = std::env::current_exe()
@@ -207,6 +220,7 @@ impl WorkspaceManager {
             "CLAUDE.md",
             ".agents/skills/manage-rss-feeds/SKILL.md",
             ".agents/skills/manage-jev-queries/SKILL.md",
+            ".agents/skills/import-export-config/SKILL.md",
         ];
 
         let files: Vec<Value> = tracked
