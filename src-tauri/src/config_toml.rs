@@ -148,6 +148,13 @@ fn format_inline_string_array(items: &[String]) -> String {
 pub fn export_to_toml_string(db: &Database) -> Result<(String, usize, usize), String> {
     let feeds = db.list_feeds()?;
     let queries = db.list_queries(false)?;
+    Ok(serialize_feeds_and_queries_to_toml(&feeds, &queries))
+}
+
+pub fn serialize_feeds_and_queries_to_toml(
+    feeds: &[Value],
+    queries: &[Value],
+) -> (String, usize, usize) {
     let now = utc_now_iso();
 
     let mut out = String::new();
@@ -162,7 +169,7 @@ pub fn export_to_toml_string(db: &Database) -> Result<(String, usize, usize), St
     if feeds.is_empty() {
         out.push_str("# (No RSS feeds configured)\n");
     } else {
-        for f in &feeds {
+        for f in feeds {
             let name = f.get("title").and_then(|v| v.as_str()).unwrap_or("");
             let url = f.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let category = f
@@ -202,7 +209,7 @@ pub fn export_to_toml_string(db: &Database) -> Result<(String, usize, usize), St
     if queries.is_empty() {
         out.push_str("# (No filter rules configured)\n");
     } else {
-        for q in &queries {
+        for q in queries {
             let name = q.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let qtype = q.get("query_type").and_then(|v| v.as_str()).unwrap_or("noul");
             let weight = q.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
@@ -243,7 +250,7 @@ pub fn export_to_toml_string(db: &Database) -> Result<(String, usize, usize), St
         }
     }
 
-    Ok((out, feeds.len(), queries.len()))
+    (out, feeds.len(), queries.len())
 }
 
 pub struct ParsedConfig {

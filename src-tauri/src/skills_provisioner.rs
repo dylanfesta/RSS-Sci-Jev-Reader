@@ -1,3 +1,4 @@
+use crate::version_manager::{list_version_backups, sanitize_version_dir_name, APP_VERSION};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -86,12 +87,16 @@ impl WorkspaceManager {
         let dir = self.get_data_dir();
         let payload = json!({
             "data_dir": dir.to_string_lossy(),
+            "app_version": APP_VERSION,
         });
-        std::fs::write(
-            &self.config_file,
-            serde_json::to_string_pretty(&payload).unwrap_or_default(),
-        )
-        .map_err(|e| format!("Failed to write workspace config: {}", e))
+        let pretty = serde_json::to_string_pretty(&payload).unwrap_or_default();
+        std::fs::write(&self.config_file, &pretty)
+            .map_err(|e| format!("Failed to write workspace config: {}", e))?;
+        if let Some(parent) = self.config_file.parent() {
+            let ver_tag = sanitize_version_dir_name(APP_VERSION);
+            let _ = std::fs::write(parent.join(format!("workspace_{ver_tag}.json")), &pretty);
+        }
+        Ok(())
     }
 
     pub fn set_data_dir(&self, raw_path: &str) -> Result<PathBuf, String> {
@@ -236,9 +241,13 @@ impl WorkspaceManager {
             .collect();
 
         let first_run = self.is_first_run.read().map(|g| *g).unwrap_or(false);
+        let backups = list_version_backups(&dir);
 
         json!({
+            "app_version": APP_VERSION,
             "data_dir": dir.to_string_lossy(),
+            "backups_dir": dir.join("backups").to_string_lossy(),
+            "version_backups": backups,
             "db_path": self.get_db_path().to_string_lossy(),
             "secrets_path": self.get_secrets_path().to_string_lossy(),
             "cli_wrapper_path": dir.join("smart-rss").to_string_lossy(),

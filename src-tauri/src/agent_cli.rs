@@ -1,3 +1,4 @@
+use crate::abstract_enricher::{enrich_entries_missing_abstracts, EnricherEndpoints};
 use crate::config_toml::{
     apply_toml_import, export_to_toml_string, preview_toml_import, ImportApplyOptions,
 };
@@ -33,17 +34,55 @@ impl AgentAPI {
     }
 
     pub async fn test_feed(&self, url: &str, max_entries: usize) -> Result<Value, String> {
+        self.test_feed_with_options(url, max_entries, true).await
+    }
+
+    pub async fn test_feed_with_options(
+        &self,
+        url: &str,
+        max_entries: usize,
+        enrich_abstracts: bool,
+    ) -> Result<Value, String> {
         let mut parsed = fetch_and_parse_feed(url, None, None, max_entries).await?;
-        let known_uids = self.db.get_known_entry_uids()?;
+        let known_summaries = self.db.get_known_entry_summaries()?;
         if let Some(entries) = parsed.get_mut("entries").and_then(|v| v.as_array_mut()) {
-            for entry in entries {
+            let mut unseen_indices: Vec<usize> = Vec::new();
+            let mut unseen_batch: Vec<Value> = Vec::new();
+            for (idx, entry) in entries.iter_mut().enumerate() {
                 let uid = entry
                     .get("entry_uid")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let seen = known_uids.contains(uid);
+                    .unwrap_or("")
+                    .to_string();
+                let seen = known_summaries.contains_key(&uid);
                 if let Some(obj) = entry.as_object_mut() {
                     obj.insert("already_seen".to_string(), Value::Bool(seen));
+                    if let Some(stored_sum) = known_summaries.get(&uid) {
+                        let cur_len = obj
+                            .get("summary")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.len())
+                            .unwrap_or(0);
+                        if stored_sum.len() > cur_len {
+                            obj.insert("summary".to_string(), Value::String(stored_sum.clone()));
+                        }
+                    }
+                }
+                if !seen && enrich_abstracts {
+                    unseen_indices.push(idx);
+                    unseen_batch.push(entry.clone());
+                }
+            }
+            if !unseen_batch.is_empty() {
+                enrich_entries_missing_abstracts(&mut unseen_batch, &EnricherEndpoints::default())
+                    .await;
+                for (pos, orig_idx) in unseen_indices.into_iter().enumerate() {
+                    if let Some(new_sum) = unseen_batch[pos].get("summary").and_then(|v| v.as_str())
+                    {
+                        if let Some(obj) = entries[orig_idx].as_object_mut() {
+                            obj.insert("summary".to_string(), Value::String(new_sum.to_string()));
+                        }
+                    }
                 }
             }
         }
@@ -63,7 +102,7 @@ impl AgentAPI {
         let mut preview_info: Option<Value> = None;
 
         if validate_first || resolved_title.is_empty() {
-            let p = self.test_feed(url, 5).await?;
+            let p = self.test_feed_with_options(url, 5, false).await?;
             if resolved_title.is_empty() {
                 resolved_title = p
                     .get("feed_title")

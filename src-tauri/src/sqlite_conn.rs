@@ -91,6 +91,30 @@ impl SqliteConn {
         Ok(conn)
     }
 
+    pub fn open_existing_no_pragma(path: &Path) -> Result<Self, String> {
+        let path_str = path.to_string_lossy();
+        let c_path = CString::new(path_str.as_bytes()).map_err(|e| e.to_string())?;
+        let mut db: *mut ffi::sqlite3 = ptr::null_mut();
+        let flags = ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_FULLMUTEX;
+
+        let rc = unsafe { ffi::sqlite3_open_v2(c_path.as_ptr(), &mut db, flags, ptr::null()) };
+        if rc != ffi::SQLITE_OK {
+            let err = Self::err_msg_raw(db);
+            if !db.is_null() {
+                unsafe {
+                    ffi::sqlite3_close(db);
+                }
+            }
+            return Err(format!("Failed to open existing SQLite database: {err}"));
+        }
+
+        unsafe {
+            ffi::sqlite3_busy_timeout(db, 5000);
+        }
+
+        Ok(Self { db })
+    }
+
     fn err_msg_raw(db: *mut ffi::sqlite3) -> String {
         if db.is_null() {
             return "Unknown SQLite error".to_string();

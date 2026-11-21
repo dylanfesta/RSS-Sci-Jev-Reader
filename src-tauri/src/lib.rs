@@ -1,3 +1,4 @@
+pub mod abstract_enricher;
 pub mod agent_cli;
 pub mod config_toml;
 pub mod crypto_store;
@@ -6,7 +7,10 @@ pub mod jev_client;
 pub mod rss_service;
 pub mod skills_provisioner;
 pub mod sqlite_conn;
+pub mod version_manager;
 
+use crate::abstract_enricher::{enrich_entries_missing_abstracts, EnricherEndpoints};
+use crate::version_manager::APP_VERSION;
 use crate::config_toml::{
     apply_toml_import, export_to_toml_string, preview_toml_import, ImportApplyOptions,
 };
@@ -43,6 +47,7 @@ pub struct AppState {
     pub db: Database,
     pub crypto: CryptoStore,
     pub workspace: WorkspaceManager,
+    pub enricher_endpoints: EnricherEndpoints,
 }
 
 impl AppState {
@@ -57,6 +62,7 @@ impl AppState {
             db,
             crypto,
             workspace,
+            enricher_endpoints: EnricherEndpoints::default(),
         })
     }
 }
@@ -273,7 +279,14 @@ pub async fn dispatch_api_request(
 
     // --- Workspace / AI Skills Folder Endpoints ---
     if path == "/api/workspace" && method_upper == "GET" {
-        return Ok(state.workspace.get_status());
+        let mut ws = state.workspace.get_status();
+        if let Some(obj) = ws.as_object_mut() {
+            obj.insert(
+                "upgrade_report".to_string(),
+                serde_json::to_value(state.db.get_last_upgrade_report()).unwrap_or_else(|_| json!({})),
+            );
+        }
+        return Ok(ws);
     }
 
     if path == "/api/workspace" && method_upper == "PUT" {
@@ -290,7 +303,14 @@ pub async fn dispatch_api_request(
             .set_db_path(new_dir.join("smart_rss.db"), true)
             .map_err(|e| (400, e))?;
         state.crypto.set_secret_path(new_dir.join("secrets.enc"));
-        return Ok(state.workspace.get_status());
+        let mut ws = state.workspace.get_status();
+        if let Some(obj) = ws.as_object_mut() {
+            obj.insert(
+                "upgrade_report".to_string(),
+                serde_json::to_value(state.db.get_last_upgrade_report()).unwrap_or_else(|_| json!({})),
+            );
+        }
+        return Ok(ws);
     }
 
     if path == "/api/workspace/resync" && method_upper == "POST" {
@@ -369,6 +389,8 @@ pub async fn dispatch_api_request(
         let counts = state.db.get_counts().map_err(|e| (400, e))?;
         let active_provider = resolve_active_provider_config(&settings);
         return Ok(json!({
+            "app_version": APP_VERSION,
+            "upgrade_report": state.db.get_last_upgrade_report(),
             "settings": settings,
             "counts": counts,
             "pruned_archived": pruned_archived,
@@ -530,16 +552,45 @@ pub async fn dispatch_api_request(
         .await
         .map_err(|e| (400, format!("RSS fetch/parse failed: {}", e)))?;
 
-        let known_uids = state.db.get_known_entry_uids().map_err(|e| (400, e))?;
+        let known_summaries = state.db.get_known_entry_summaries().map_err(|e| (400, e))?;
         if let Some(entries) = parsed.get_mut("entries").and_then(|v| v.as_array_mut()) {
-            for entry in entries {
+            let mut unseen_indices: Vec<usize> = Vec::new();
+            let mut unseen_batch: Vec<Value> = Vec::new();
+            for (idx, entry) in entries.iter_mut().enumerate() {
                 let uid = entry
                     .get("entry_uid")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let seen = known_uids.contains(uid);
+                    .unwrap_or("")
+                    .to_string();
+                let seen = known_summaries.contains_key(&uid);
                 if let Some(obj) = entry.as_object_mut() {
                     obj.insert("already_seen".to_string(), Value::Bool(seen));
+                    if let Some(stored_sum) = known_summaries.get(&uid) {
+                        let cur_len = obj
+                            .get("summary")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.len())
+                            .unwrap_or(0);
+                        if stored_sum.len() > cur_len {
+                            obj.insert("summary".to_string(), Value::String(stored_sum.clone()));
+                        }
+                    }
+                }
+                if !seen {
+                    unseen_indices.push(idx);
+                    unseen_batch.push(entry.clone());
+                }
+            }
+            if !unseen_batch.is_empty() {
+                enrich_entries_missing_abstracts(&mut unseen_batch, &state.enricher_endpoints)
+                    .await;
+                for (pos, orig_idx) in unseen_indices.into_iter().enumerate() {
+                    if let Some(new_sum) = unseen_batch[pos].get("summary").and_then(|v| v.as_str())
+                    {
+                        if let Some(obj) = entries[orig_idx].as_object_mut() {
+                            obj.insert("summary".to_string(), Value::String(new_sum.to_string()));
+                        }
+                    }
                 }
             }
         }
@@ -610,9 +661,26 @@ pub async fn dispatch_api_request(
         }
 
         let total_parsed = all_parsed_entries.len();
+        let mut seen_uids = state.db.get_known_entry_uids().map_err(|e| (400, e))?;
+        let mut unseen_entries: Vec<Value> = Vec::new();
+        for item in all_parsed_entries {
+            let uid = item
+                .get("entry_uid")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if uid.is_empty() || seen_uids.contains(&uid) {
+                continue;
+            }
+            seen_uids.insert(uid);
+            unseen_entries.push(item);
+        }
+
+        enrich_entries_missing_abstracts(&mut unseen_entries, &state.enricher_endpoints).await;
+
         let newly_inserted = state
             .db
-            .insert_new_entries(&all_parsed_entries)
+            .insert_new_entries(&unseen_entries)
             .map_err(|e| (400, e))?;
         let skipped_known = total_parsed.saturating_sub(newly_inserted.len());
 
@@ -3105,6 +3173,538 @@ instructions = "Is this paper a review article?"
         let single_entries = res_single["entries"].as_array().unwrap();
         assert_eq!(single_entries.len(), 1);
         assert_eq!(single_entries[0]["title"], "Beta Paper 1");
+
+        let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[tokio::test]
+    async fn test_missing_abstract_waterfall_enrichment_and_jev_scoring() {
+        use axum::{
+            extract::{Path as AxumPath, Query as AxumQuery},
+            routing::{get, post},
+            Json,
+        };
+        use std::sync::Mutex;
+
+        let api_hits: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let jev_seen_abstracts: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        let crossref_full_jats = "<jats:title>Abstract</jats:title><jats:p>\
+            Synaptic consolidation across sleep-wake cycles depends on coordinated neuron-astrocyte signaling in the neocortex. \
+            Here we use two-photon calcium imaging and single-nucleus RNA sequencing across 48,000 cortical cells in freely sleeping mice. \
+            We show that astrocytic cAMP transients gate dendritic spine remodeling during non-REM slow oscillations. \
+            Pharmacological or optogenetic suppression of astrocytic GPCR pathways selectively abolishes long-term memory retention without altering baseline sleep architecture.\
+            </jats:p>";
+
+        let openalex_full_text = "Abstract: Cortical predictive coding models propose that feedback projections carry top-down expectations to sensory areas. \
+            By recording simultaneously from visual and prefrontal populations in primates, we isolate layer-specific prediction error signals across hierarchical stages. \
+            Causal inactivation of deep-layer feedback selectively attenuates context-dependent surprise responses while sparing feedforward tuning. \
+            These results establish an anatomical and physiological substrate for hierarchical Bayesian inference in primate cortex.";
+
+        // Build inverted index from `openalex_full_text`
+        let mut inverted_map = serde_json::Map::new();
+        for (idx, word) in openalex_full_text.split_whitespace().enumerate() {
+            inverted_map
+                .entry(word.to_string())
+                .and_modify(|v| {
+                    if let Some(arr) = v.as_array_mut() {
+                        arr.push(json!(idx));
+                    }
+                })
+                .or_insert_with(|| json!([idx]));
+        }
+
+        let europepmc_full_text = "High-pressure hydride superconductors offer a route toward high-temperature quantum transport under modest magnetic fields. \
+            Using synchrotron X-ray diffraction and electrical transport in diamond anvil cells up to 165 GPa, we synthesize a clathrate lanthanum-yttrium hydride phase. \
+            Zero-resistance transitions and isotopic shifts confirm phonon-mediated pairing above 240 K across multiple thermal cycles. \
+            First-principles anharmonic lattice dynamics quantitatively reproduce the observed critical temperature and upper critical field.";
+
+        let hits_cr_doi = Arc::clone(&api_hits);
+        let cr_jats_clone = crossref_full_jats.to_string();
+        let hits_cr_search = Arc::clone(&api_hits);
+        let hits_oa_doi = Arc::clone(&api_hits);
+        let oa_inv_clone = Value::Object(inverted_map);
+        let hits_epmc = Arc::clone(&api_hits);
+        let epmc_text_clone = europepmc_full_text.to_string();
+        let hits_s2 = Arc::clone(&api_hits);
+        let jev_abs_clone = Arc::clone(&jev_seen_abstracts);
+
+        let feed_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:prism="http://prismstandard.org/namespaces/basic/2.0/">
+  <channel>
+    <title>Frontiers of Multidisciplinary Science</title>
+    <description>Mixed abstract completeness feed</description>
+    <item>
+      <guid>doi:10.1038/s41586-026-99000-0</guid>
+      <prism:doi>10.1038/s41586-026-99000-0</prism:doi>
+      <title>Paper 1 Already Has a Full Paragraph Abstract</title>
+      <link>https://www.nature.com/articles/s41586-026-99000-0</link>
+      <description>Topological quantum error correction requires fault-tolerant logical gates with low spatial overhead across planar qubit arrays. Building on recent demonstrations (Kim et al., 2025; e.g. surface code thresholds above 0.8%), we implement transversal Clifford operations on a 72-qubit superconducting processor. Logical state tomography confirms exponential suppression of logical error rates with code distance across 50 syndrome extraction rounds. These results demonstrate scalable fault-tolerant quantum memory below threshold.</description>
+    </item>
+    <item>
+      <guid>https://www.nature.com/articles/s41586-026-99001-1</guid>
+      <title>Astrocytic cAMP Transients Gate Cortical Memory Consolidation</title>
+      <link>https://www.nature.com/articles/s41586-026-99001-1</link>
+      <description>Nature, Published online: 20 November 2026; doi:10.1038/s41586-026-99001-1
+Two-photon imaging reveals how astrocytes regulate spine remodeling during sleep.</description>
+    </item>
+    <item>
+      <guid>cell-pii-S0896-6273-26-00999-1</guid>
+      <title>Layer-Specific Prediction Error Signals Across Primate Cortex</title>
+      <link>https://www.cell.com/neuron/fulltext/S0896-6273(26)00999-1</link>
+      <description>Feedback projections carry top-down expectations in sensory hierarchies. Here we examine their laminar specificity in primates.</description>
+    </item>
+    <item>
+      <guid>doi:10.1126/science.adq7777</guid>
+      <title>Anharmonic Pairing in Clathrate Lanthanum-Yttrium Hydrides</title>
+      <link>https://www.science.org/doi/10.1126/science.adq7777?af=R</link>
+      <description></description>
+    </item>
+  </channel>
+</rss>"#;
+
+        let mock_router = Router::new()
+            .route(
+                "/feed.rss",
+                get(move || async move {
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "application/rss+xml")],
+                        feed_xml,
+                    )
+                }),
+            )
+            .route(
+                "/crossref/works/{*doi}",
+                get(move |AxumPath(doi): AxumPath<String>| {
+                    let hits = Arc::clone(&hits_cr_doi);
+                    let jats = cr_jats_clone.clone();
+                    async move {
+                        hits.lock().unwrap().push(format!("crossref_doi:{doi}"));
+                        if doi == "10.1038/s41586-026-99001-1" {
+                            (
+                                StatusCode::OK,
+                                Json(json!({ "message": { "DOI": doi, "abstract": jats } })),
+                            )
+                                .into_response()
+                        } else {
+                            (StatusCode::NOT_FOUND, Json(json!({}))).into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/crossref/works",
+                get(move |AxumQuery(params): AxumQuery<HashMap<String, String>>| {
+                    let hits = Arc::clone(&hits_cr_search);
+                    async move {
+                        let qtitle = params.get("query.title").cloned().unwrap_or_default();
+                        hits.lock()
+                            .unwrap()
+                            .push(format!("crossref_title:{qtitle}"));
+                        if qtitle.contains("Layer-Specific Prediction Error Signals") {
+                            // Simulates Elsevier/Cell Press: Crossref resolves DOI on exact title match, but has no abstract
+                            Json(json!({
+                                "message": {
+                                    "items": [{
+                                        "DOI": "10.1016/j.neuron.2026.11.099",
+                                        "title": ["Layer-Specific Prediction Error Signals Across Primate Cortex"]
+                                    }]
+                                }
+                            }))
+                        } else {
+                            Json(json!({ "message": { "items": [] } }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/openalex/works/{*doi_path}",
+                get(move |AxumPath(doi_path): AxumPath<String>| {
+                    let hits = Arc::clone(&hits_oa_doi);
+                    let inv = oa_inv_clone.clone();
+                    async move {
+                        hits.lock()
+                            .unwrap()
+                            .push(format!("openalex_doi:{doi_path}"));
+                        if doi_path.ends_with("10.1016/j.neuron.2026.11.099") {
+                            (
+                                StatusCode::OK,
+                                Json(json!({
+                                    "id": "https://openalex.org/W999",
+                                    "doi": "https://doi.org/10.1016/j.neuron.2026.11.099",
+                                    "title": "Layer-Specific Prediction Error Signals Across Primate Cortex",
+                                    "abstract_inverted_index": inv
+                                })),
+                            )
+                                .into_response()
+                        } else {
+                            (StatusCode::NOT_FOUND, Json(json!({}))).into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/europepmc/search",
+                get(move |AxumQuery(params): AxumQuery<HashMap<String, String>>| {
+                    let hits = Arc::clone(&hits_epmc);
+                    let txt = epmc_text_clone.clone();
+                    async move {
+                        let q = params.get("query").cloned().unwrap_or_default();
+                        hits.lock().unwrap().push(format!("europepmc:{q}"));
+                        if q.contains("10.1126/science.adq7777") {
+                            Json(json!({
+                                "resultList": {
+                                    "result": [{
+                                        "doi": "10.1126/science.adq7777",
+                                        "title": "Anharmonic Pairing in Clathrate Lanthanum-Yttrium Hydrides",
+                                        "abstractText": txt
+                                    }]
+                                }
+                            }))
+                        } else {
+                            Json(json!({ "resultList": { "result": [] } }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/s2/paper/{*paper_id}",
+                get(move |AxumPath(paper_id): AxumPath<String>| {
+                    let hits = Arc::clone(&hits_s2);
+                    async move {
+                        hits.lock().unwrap().push(format!("s2:{paper_id}"));
+                        (StatusCode::NOT_FOUND, Json(json!({}))).into_response()
+                    }
+                }),
+            )
+            .route(
+                "/jev/v1/decisions",
+                post(move |Json(body): Json<Value>| {
+                    let seen_abs = Arc::clone(&jev_abs_clone);
+                    async move {
+                        let title = body["state"]["title"].as_str().unwrap_or("").to_string();
+                        let abs = body["state"]["abstract"].as_str().unwrap_or("").to_string();
+                        seen_abs.lock().unwrap().insert(title, abs);
+                        let qs = body["questions"].as_object().unwrap();
+                        let mut answers = serde_json::Map::new();
+                        for k in qs.keys() {
+                            answers.insert(
+                                k.clone(),
+                                json!({ "type": "noul", "noul": 0.85, "confidence": 0.90 }),
+                            );
+                        }
+                        Json(json!({ "model": "pplx-decider-flash", "answers": answers }))
+                    }
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, mock_router).await;
+        });
+
+        let base_path = create_temp_dir("abstract_waterfall");
+        let mut state = AppState::new(Some(base_path.join("data")), false).unwrap();
+        state.enricher_endpoints = EnricherEndpoints {
+            arxiv_api_url: format!("http://{}/arxiv", addr),
+            crossref_api_url: format!("http://{}/crossref", addr),
+            openalex_api_url: format!("http://{}/openalex", addr),
+            europepmc_api_url: format!("http://{}/europepmc", addr),
+            semanticscholar_api_url: format!("http://{}/s2", addr),
+            allow_local_or_example_urls: true,
+        };
+
+        // Configure keyless local-decider pointing to our mock Jev server + 1 active query
+        dispatch_api_request(
+            &state,
+            "PUT",
+            "/api/settings",
+            Some(json!({
+                "ai_provider": "local-decider",
+                "provider_api_url": format!("http://{}/jev/v1/decisions", addr),
+                "jev_model": "pplx-decider-flash"
+            })),
+        )
+        .await
+        .unwrap();
+
+        state
+            .db
+            .create_query(
+                "Systems & Quantum Science",
+                "noul",
+                "Is this original experimental or theoretical science?",
+                &json!({"true": "Original science", "false": "Not original"}),
+                1.0,
+                true,
+            )
+            .unwrap();
+
+        state
+            .db
+            .create_feed(
+                "Frontiers Mock",
+                &format!("http://{}/feed.rss", addr),
+                "Science",
+                true,
+            )
+            .unwrap();
+
+        // 1. First refresh: fetches 4 entries, enriches only the 3 missing/short abstracts, and scores all 4 with Jev
+        let refresh_1 = dispatch_api_request(
+            &state,
+            "POST",
+            "/api/feeds/refresh",
+            Some(json!({ "evaluate_unscored_active": false })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(refresh_1["newly_inserted"], 4);
+        assert_eq!(refresh_1["entries_evaluated"], 4);
+
+        let recorded_hits = api_hits.lock().unwrap().clone();
+        // Paper 1 (10.1038/s41586-026-99000-0) already had a full paragraph -> ZERO external API calls
+        assert!(!recorded_hits
+            .iter()
+            .any(|h| h.contains("s41586-026-99000-0")));
+        // Paper 2 (10.1038/s41586-026-99001-1) resolved on Crossref -> did NOT hit OpenAlex/EuropePMC/S2
+        assert!(recorded_hits
+            .iter()
+            .any(|h| h == "crossref_doi:10.1038/s41586-026-99001-1"));
+        assert!(!recorded_hits
+            .iter()
+            .any(|h| h.contains("openalex") && h.contains("s41586-026-99001-1")));
+        // Paper 3 resolved DOI via Crossref title match -> fetched full abstract from OpenAlex -> did NOT hit EuropePMC/S2
+        assert!(recorded_hits
+            .iter()
+            .any(|h| h.starts_with("crossref_title:Layer-Specific Prediction Error Signals")));
+        assert!(recorded_hits
+            .iter()
+            .any(|h| h.contains("openalex_doi:") && h.contains("10.1016/j.neuron.2026.11.099")));
+        assert!(!recorded_hits
+            .iter()
+            .any(|h| h.starts_with("europepmc:") && h.contains("10.1016/j.neuron.2026.11.099")));
+        // Paper 4 fell through Crossref + OpenAlex -> resolved on Europe PMC -> did NOT hit S2
+        assert!(recorded_hits
+            .iter()
+            .any(|h| h.starts_with("europepmc:") && h.contains("10.1126/science.adq7777")));
+        assert!(!recorded_hits
+            .iter()
+            .any(|h| h.contains("s2:") && h.contains("10.1126/science.adq7777")));
+
+        // Verify stored entries in SQLite AND the exact abstracts sent to Jev
+        let stored = state.db.list_entries("active", None, None).unwrap();
+        assert_eq!(stored.len(), 4);
+        let jev_map = jev_seen_abstracts.lock().unwrap().clone();
+
+        let p2 = stored
+            .iter()
+            .find(|e| e["title"] == "Astrocytic cAMP Transients Gate Cortical Memory Consolidation")
+            .unwrap();
+        assert!(p2["summary"]
+            .as_str()
+            .unwrap()
+            .contains("48,000 cortical cells"));
+        assert!(!p2["summary"].as_str().unwrap().starts_with("Abstract"));
+        assert_eq!(
+            jev_map["Astrocytic cAMP Transients Gate Cortical Memory Consolidation"],
+            p2["summary"].as_str().unwrap()
+        );
+
+        let p3 = stored
+            .iter()
+            .find(|e| e["title"] == "Layer-Specific Prediction Error Signals Across Primate Cortex")
+            .unwrap();
+        assert!(p3["summary"]
+            .as_str()
+            .unwrap()
+            .contains("hierarchical Bayesian inference in primate cortex"));
+        assert_eq!(
+            jev_map["Layer-Specific Prediction Error Signals Across Primate Cortex"],
+            p3["summary"].as_str().unwrap()
+        );
+
+        let p4 = stored
+            .iter()
+            .find(|e| e["title"] == "Anharmonic Pairing in Clathrate Lanthanum-Yttrium Hydrides")
+            .unwrap();
+        assert!(p4["summary"]
+            .as_str()
+            .unwrap()
+            .contains("diamond anvil cells up to 165 GPa"));
+
+        // 2. Second refresh: all 4 entries are remembered in SQLite -> 0 new scholarly API calls!
+        api_hits.lock().unwrap().clear();
+        let refresh_2 = dispatch_api_request(
+            &state,
+            "POST",
+            "/api/feeds/refresh",
+            Some(json!({ "evaluate_unscored_active": false })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(refresh_2["newly_inserted"], 0);
+        assert_eq!(refresh_2["skipped_known"], 4);
+        assert!(api_hits.lock().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[test]
+    fn test_versioned_backups_and_automatic_toml_fallback_recovery() {
+        use crate::sqlite_conn::SqliteConn;
+        use crate::version_manager::list_version_backups;
+
+        let base_path = create_temp_dir("version_upgrade_recovery");
+        let data_dir = base_path.join("SmartRSSReader");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let db_path = data_dir.join("smart_rss.db");
+        let secrets_path = data_dir.join("secrets.enc");
+
+        // Save an encrypted key in secrets.enc as an Alpha 1 tester would have
+        let crypto = CryptoStore::new(&secrets_path);
+        crypto
+            .save_api_key_for_provider(Some("nanogpt"), "nk-alpha1-secret-777", "tester-pass")
+            .unwrap();
+
+        // Simulate a legacy pre-versioning v0.1.0 database (no `app_version` in settings, no `tags_json` on feeds)
+        {
+            let raw_conn = SqliteConn::open(&db_path).unwrap();
+            raw_conn
+                .execute_batch(
+                    r#"
+                    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                    INSERT INTO settings (key, value) VALUES ('ai_provider', 'nanogpt');
+                    INSERT INTO settings (key, value) VALUES ('jev_model', 'surogate/rune-26b-a4b');
+
+                    CREATE TABLE feeds (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL,
+                        url TEXT NOT NULL UNIQUE,
+                        category TEXT NOT NULL DEFAULT 'General',
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        last_fetched_at TEXT,
+                        last_error TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    INSERT INTO feeds (title, url, category, enabled, created_at)
+                    VALUES ('Neuron', 'https://www.cell.com/neuron/current.rss', 'Neuroscience', 1, '2026-11-01T00:00:00+00:00');
+                    INSERT INTO feeds (title, url, category, enabled, created_at)
+                    VALUES ('PRX Quantum', 'https://feeds.aps.org/rss/recent/prxquantum.xml', 'Physics', 1, '2026-11-01T00:00:00+00:00');
+
+                    CREATE TABLE queries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        query_type TEXT NOT NULL,
+                        instructions TEXT NOT NULL,
+                        criteria_json TEXT NOT NULL DEFAULT '{}',
+                        weight REAL NOT NULL DEFAULT 1.0,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL
+                    );
+                    INSERT INTO queries (name, query_type, instructions, criteria_json, weight, enabled, created_at)
+                    VALUES ('Circuit Modeling', 'score', 'Rate circuit modeling depth.', '["None","Minor","Core"]', 2.5, 1, '2026-11-01T00:00:00+00:00');
+                    INSERT INTO queries (name, query_type, instructions, criteria_json, weight, enabled, created_at)
+                    VALUES ('Avoid Errata', 'noul', 'Is this an erratum?', '{"true":"Erratum","false":"Research"}', -3.0, 1, '2026-11-01T00:00:00+00:00');
+                    "#,
+                )
+                .unwrap();
+        }
+
+        // 1. Tester installs and launches v0.2.0-alpha.1 on existing ~/SmartRSSReader (never manually exported TOML!)
+        let db_v2 = Database::new_with_version(&db_path, "0.2.0-alpha.1", true).unwrap();
+        let rep_v2 = db_v2.get_last_upgrade_report();
+        assert!(rep_v2.upgraded);
+        assert!(!rep_v2.recovered_from_toml);
+        assert_eq!(rep_v2.previous_version.as_deref(), Some("0.1.0"));
+        assert_eq!(rep_v2.feeds_preserved, 2);
+        assert_eq!(rep_v2.rules_preserved, 2);
+
+        // Verify ~/SmartRSSReader/backups/v0.1.0/ contains DB + secrets.enc + auto-exported TOML + manifest
+        let v010_backup = data_dir.join("backups").join("v0.1.0");
+        assert!(v010_backup.join("smart_rss.db").exists());
+        assert!(v010_backup.join("secrets.enc").exists());
+        assert!(v010_backup.join("smart_rss_config.toml").exists());
+        assert!(v010_backup.join("backup_manifest.json").exists());
+        assert!(data_dir
+            .join("backups")
+            .join("latest_feeds_and_rules.toml")
+            .exists());
+
+        // Add a tagged feed in v0.2.0-alpha.1 to verify rolling TOML backup stays current
+        db_v2
+            .create_feed_with_tags(
+                "Nature Methods",
+                "https://www.nature.com/nmeth.rss",
+                "Methods",
+                &["imaging".to_string(), "omics".to_string()],
+                true,
+            )
+            .unwrap();
+
+        // Re-opening under the SAME version (0.2.0-alpha.1) must NOT create redundant backups
+        drop(db_v2);
+        let db_v2_reopen = Database::new_with_version(&db_path, "0.2.0-alpha.1", true).unwrap();
+        assert!(!db_v2_reopen.get_last_upgrade_report().upgraded);
+        assert_eq!(list_version_backups(&data_dir).len(), 1);
+        drop(db_v2_reopen);
+
+        // 2. Simulate an incompatible schema breakage in smart_rss.db (e.g. `entries` replaced with incompatible columns)
+        {
+            let raw_conn = SqliteConn::open(&db_path).unwrap();
+            raw_conn
+                .execute_batch("DROP TABLE entries; CREATE TABLE entries (broken_col INTEGER);")
+                .unwrap();
+        }
+
+        // Tester launches v0.3.0-alpha.1 -> init_schema_and_verify detects incompatible `entries` table,
+        // backs up v0.2.0-alpha.1, and automatically restores all 3 feeds (with tags!), 2 rules, and settings from TOML!
+        let db_v3 = Database::new_with_version(&db_path, "0.3.0-alpha.1", true).unwrap();
+        let rep_v3 = db_v3.get_last_upgrade_report();
+        assert!(rep_v3.upgraded);
+        assert!(rep_v3.recovered_from_toml);
+        assert_eq!(rep_v3.feeds_preserved, 3);
+        assert_eq!(rep_v3.rules_preserved, 2);
+
+        let feeds_v3 = db_v3.list_feeds().unwrap();
+        assert_eq!(feeds_v3.len(), 3);
+        let nmeth = feeds_v3
+            .iter()
+            .find(|f| f["url"] == "https://www.nature.com/nmeth.rss")
+            .unwrap();
+        assert_eq!(nmeth["tags"], json!(["imaging", "omics"]));
+
+        let queries_v3 = db_v3.list_queries(false).unwrap();
+        assert_eq!(queries_v3.len(), 2);
+        let settings_v3 = db_v3.get_settings().unwrap();
+        assert_eq!(settings_v3.get("ai_provider").map(|s| s.as_str()), Some("nanogpt"));
+        assert_eq!(
+            settings_v3.get("jev_model").map(|s| s.as_str()),
+            Some("surogate/rune-26b-a4b")
+        );
+        assert_eq!(
+            settings_v3.get("app_version").map(|s| s.as_str()),
+            Some("0.3.0-alpha.1")
+        );
+        drop(db_v3);
+
+        // 3. Even total file corruption of `smart_rss.db` recovers all feeds & rules from rolling TOML backup!
+        std::fs::write(&db_path, b"not a valid sqlite file at all").unwrap();
+        let db_recovered = Database::new_with_version(&db_path, "0.3.0-alpha.1", true).unwrap();
+        assert!(db_recovered.get_last_upgrade_report().recovered_from_toml);
+        assert_eq!(db_recovered.list_feeds().unwrap().len(), 3);
+        assert_eq!(db_recovered.list_queries(false).unwrap().len(), 2);
+
+        // Encrypted API key in secrets.enc is still intact and unlockable
+        let crypto_after = CryptoStore::new(&secrets_path);
+        crypto_after.unlock_api_key("tester-pass").unwrap();
+        assert_eq!(
+            crypto_after.get_api_key_for_provider("nanogpt").as_deref(),
+            Some("nk-alpha1-secret-777")
+        );
 
         let _ = std::fs::remove_dir_all(&base_path);
     }

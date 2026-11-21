@@ -205,7 +205,7 @@
           <div class="info-panel-card">
             <div class="info-card-title-row">
               <strong>⚛ 3. About SmartRSSReader</strong>
-              <span class="badge badge-muted">v0.1.0 Tauri</span>
+              <span class="badge badge-muted" id="app-version-badge">v0.1.0-alpha.4 Tauri</span>
             </div>
             <ul class="about-feature-list">
               <li>
@@ -704,7 +704,10 @@
           </div>
 
           <div class="card form-card max-w-md">
-            <h2>Data &amp; AI Skills Folder</h2>
+            <div class="split-header-sm" style="margin-bottom: 0.45rem;">
+              <h2 style="margin: 0;">Data &amp; AI Skills Folder</h2>
+              <span class="badge badge-muted" id="settings-version-badge">v0.1.0-alpha.4</span>
+            </div>
             <p class="section-desc" style="margin-bottom: 0.85rem;">
               Configure the folder where SmartRSSReader stores <code>smart_rss.db</code>, <code>secrets.enc</code>, and provisions the local AI skills (<code>.agents/skills/</code>, <code>AGENTS.md</code>, and <code>./smart-rss</code>).
             </p>
@@ -721,6 +724,7 @@
                 <button type="button" class="btn btn-secondary" id="btn-settings-open-folder">📂 Open Folder</button>
               </div>
             </form>
+            <div id="version-backups-summary" class="muted-label" style="margin-top: 0.75rem;"></div>
           </div>
         </div>
       </div>

@@ -8,8 +8,10 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-pub const USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0 SmartRSSReader/0.1";
+pub const USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0 SmartRSSReader/",
+    env!("CARGO_PKG_VERSION")
+);
 
 pub fn unescape_html_entities(input: &str) -> String {
     let mut s = input
@@ -116,6 +118,7 @@ struct RawEntryItem {
     id: String,
     prism_doi: String,
     dc_identifier: String,
+    extra_doi: String,
     title: String,
     link: String,
     authors: Vec<String>,
@@ -259,6 +262,11 @@ pub fn parse_feed_content(
                         "dc:identifier" | "dc_identifier" => {
                             if item.dc_identifier.is_empty() && !text_val.is_empty() {
                                 item.dc_identifier = text_val;
+                            }
+                        }
+                        "dc:doi" | "dc_doi" | "doi" => {
+                            if item.extra_doi.is_empty() && !text_val.is_empty() {
+                                item.extra_doi = text_val;
                             }
                         }
                         "title" => {
@@ -408,15 +416,28 @@ pub fn parse_feed_content(
             feed_url,
         );
 
+        let (doi_opt, arxiv_opt) = crate::abstract_enricher::extract_identifiers_from_parts(&[
+            &item.prism_doi,
+            &item.extra_doi,
+            &item.dc_identifier,
+            &item.id,
+            &link,
+            &item.content,
+            &item.summary,
+        ]);
+
         entries_out.push(json!({
             "entry_uid": uid,
             "feed_id": feed_id,
+            "feed_url": feed_url,
             "journal_title": journal_title,
             "title": title,
             "link": link,
             "authors": authors,
             "published_at": published_at,
             "summary": summary,
+            "doi": doi_opt.unwrap_or_default(),
+            "arxiv_id": arxiv_opt.unwrap_or_default(),
         }));
     }
 
@@ -443,12 +464,22 @@ pub async fn fetch_and_parse_feed(
         return parse_feed_content(&bytes, clean_url, feed_id, feed_title_override, max_entries);
     }
 
-    let client = reqwest::Client::builder()
+    let lower_url = clean_url.to_ascii_lowercase();
+    let is_loopback = lower_url.starts_with("http://127.0.0.1")
+        || lower_url.starts_with("https://127.0.0.1")
+        || lower_url.starts_with("http://localhost")
+        || lower_url.starts_with("https://localhost")
+        || lower_url.starts_with("http://[::1]")
+        || lower_url.starts_with("https://[::1]");
+
+    let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+        .redirect(reqwest::redirect::Policy::limited(10));
+    if is_loopback {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|e| e.to_string())?;
 
     let resp = client
         .get(clean_url)

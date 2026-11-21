@@ -1,6 +1,11 @@
 //! SQLite persistence layer for SmartRSSReader with memory of active and archived entries.
 
+use crate::config_toml::{apply_toml_import, ImportApplyOptions};
 use crate::sqlite_conn::{SqlParam, SqliteConn};
+use crate::version_manager::{
+    create_versioned_backup, find_best_recovery_toml, inspect_existing_db,
+    write_rolling_toml_snapshot, ExistingDbState, UpgradeReport, APP_VERSION, SCHEMA_VERSION,
+};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -51,26 +56,41 @@ fn round1(v: f64) -> f64 {
 #[derive(Clone)]
 pub struct Database {
     db_path: Arc<RwLock<PathBuf>>,
+    last_upgrade: Arc<RwLock<UpgradeReport>>,
 }
 
 impl Database {
     pub fn new(db_path: impl AsRef<Path>, seed_defaults: bool) -> Result<Self, String> {
+        Self::new_with_version(db_path, APP_VERSION, seed_defaults)
+    }
+
+    pub fn new_with_version(
+        db_path: impl AsRef<Path>,
+        app_version: &str,
+        seed_defaults: bool,
+    ) -> Result<Self, String> {
         let path_buf = db_path.as_ref().to_path_buf();
         if let Some(parent) = path_buf.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let db = Self {
             db_path: Arc::new(RwLock::new(path_buf)),
+            last_upgrade: Arc::new(RwLock::new(UpgradeReport::fresh(app_version))),
         };
-        db.init_schema()?;
-        let _ = db.prune_old_archived_entries(DEFAULT_ARCHIVE_RETENTION_DAYS, None);
-        if seed_defaults {
-            db.seed_if_empty()?;
-        }
+        db.open_and_upgrade_or_recover(app_version, seed_defaults)?;
         Ok(db)
     }
 
     pub fn set_db_path(&self, new_path: impl AsRef<Path>, seed_defaults: bool) -> Result<(), String> {
+        self.set_db_path_with_version(new_path, APP_VERSION, seed_defaults)
+    }
+
+    pub fn set_db_path_with_version(
+        &self,
+        new_path: impl AsRef<Path>,
+        app_version: &str,
+        seed_defaults: bool,
+    ) -> Result<(), String> {
         let path_buf = new_path.as_ref().to_path_buf();
         if let Some(parent) = path_buf.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -78,11 +98,229 @@ impl Database {
         if let Ok(mut g) = self.db_path.write() {
             *g = path_buf;
         }
-        self.init_schema()?;
-        let _ = self.prune_old_archived_entries(DEFAULT_ARCHIVE_RETENTION_DAYS, None);
-        if seed_defaults {
-            self.seed_if_empty()?;
+        self.open_and_upgrade_or_recover(app_version, seed_defaults)
+    }
+
+    pub fn get_last_upgrade_report(&self) -> UpgradeReport {
+        self.last_upgrade
+            .read()
+            .map(|r| r.clone())
+            .unwrap_or_else(|_| UpgradeReport::fresh(APP_VERSION))
+    }
+
+    fn open_and_upgrade_or_recover(
+        &self,
+        app_version: &str,
+        seed_defaults: bool,
+    ) -> Result<(), String> {
+        let path_buf = self.get_db_path();
+        let data_dir = path_buf
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        let mut report = UpgradeReport::fresh(app_version);
+        let mut inline_toml: Option<String> = None;
+        let mut preserved_settings: HashMap<String, String> = HashMap::new();
+        let mut pre_feeds_count = 0usize;
+        let mut pre_rules_count = 0usize;
+        let mut needs_initial_rolling_toml = false;
+        let mut backup_created_already = false;
+
+        match inspect_existing_db(&path_buf) {
+            ExistingDbState::MissingOrEmpty => {}
+            ExistingDbState::Readable {
+                detected_version,
+                had_explicit_version,
+                preserved_settings: ps,
+                toml_snapshot,
+                feeds_count,
+                rules_count,
+            } => {
+                inline_toml = toml_snapshot;
+                preserved_settings = ps;
+                pre_feeds_count = feeds_count;
+                pre_rules_count = rules_count;
+
+                if detected_version != app_version {
+                    if let Ok((bdir, toml_p)) = create_versioned_backup(
+                        &data_dir,
+                        &path_buf,
+                        &detected_version,
+                        app_version,
+                        inline_toml.as_deref(),
+                        feeds_count,
+                        rules_count,
+                        &preserved_settings,
+                        "version_upgrade",
+                    ) {
+                        backup_created_already = true;
+                        report.upgraded = true;
+                        report.previous_version = Some(detected_version.clone());
+                        report.backup_dir = Some(bdir.to_string_lossy().to_string());
+                        report.toml_backup_path =
+                            toml_p.map(|p| p.to_string_lossy().to_string());
+                        report.feeds_preserved = feeds_count;
+                        report.rules_preserved = rules_count;
+                        report.message = Some(format!(
+                            "Upgraded data folder from v{} to v{} (backup saved in {}).",
+                            detected_version.trim_start_matches('v'),
+                            app_version.trim_start_matches('v'),
+                            bdir.display()
+                        ));
+                    }
+                } else if !had_explicit_version && (feeds_count > 0 || rules_count > 0) {
+                    needs_initial_rolling_toml = true;
+                }
+            }
+            ExistingDbState::CorruptOrUnreadable { .. } => {
+                if let Ok((bdir, toml_p)) = create_versioned_backup(
+                    &data_dir,
+                    &path_buf,
+                    "corrupt",
+                    app_version,
+                    None,
+                    0,
+                    0,
+                    &preserved_settings,
+                    "corrupt_db_backup",
+                ) {
+                    backup_created_already = true;
+                    report.backup_dir = Some(bdir.to_string_lossy().to_string());
+                    report.toml_backup_path = toml_p.map(|p| p.to_string_lossy().to_string());
+                }
+            }
         }
+
+        match self.init_schema_and_verify() {
+            Ok(()) => {
+                let _ = self.prune_old_archived_entries(DEFAULT_ARCHIVE_RETENTION_DAYS, None);
+                if seed_defaults {
+                    self.seed_if_empty()?;
+                }
+            }
+            Err(_schema_err) => {
+                // Automatic non-destructive TOML fallback recovery!
+                if !backup_created_already && path_buf.exists() {
+                    let prev_lbl = report
+                        .previous_version
+                        .clone()
+                        .unwrap_or_else(|| "schema_incompatible".to_string());
+                    if let Ok((bdir, toml_p)) = create_versioned_backup(
+                        &data_dir,
+                        &path_buf,
+                        &prev_lbl,
+                        app_version,
+                        inline_toml.as_deref(),
+                        pre_feeds_count,
+                        pre_rules_count,
+                        &preserved_settings,
+                        "schema_incompatible_recovery",
+                    ) {
+                        report.backup_dir = Some(bdir.to_string_lossy().to_string());
+                        report.toml_backup_path =
+                            toml_p.map(|p| p.to_string_lossy().to_string());
+                    }
+                }
+
+                // Remove broken/incompatible DB files and initialize a clean DB
+                let _ = std::fs::remove_file(&path_buf);
+                for suffix in ["-wal", "-shm"] {
+                    let side = PathBuf::from(format!("{}{}", path_buf.display(), suffix));
+                    let _ = std::fs::remove_file(side);
+                }
+
+                self.init_schema()?;
+
+                let recovery_toml = find_best_recovery_toml(&data_dir, inline_toml.as_deref());
+                if let Some(toml_str) = recovery_toml {
+                    let opts = ImportApplyOptions {
+                        override_all: true,
+                        ..Default::default()
+                    };
+                    if let Ok(summary) = apply_toml_import(self, &toml_str, &opts) {
+                        report.feeds_preserved = summary.feeds_added + summary.feeds_overridden;
+                        report.rules_preserved = summary.rules_added + summary.rules_overridden;
+                    }
+                    if !preserved_settings.is_empty() {
+                        let _ = self.update_settings(&preserved_settings);
+                    }
+                } else if seed_defaults {
+                    self.seed_if_empty()?;
+                }
+
+                report.upgraded = true;
+                report.recovered_from_toml = true;
+                let bdir_disp = report
+                    .backup_dir
+                    .as_deref()
+                    .unwrap_or("backups/");
+                report.message = Some(format!(
+                    "Database schema changed or needed recovery — automatically restored {} feed(s) and {} filter rule(s) from TOML backup (previous DB preserved in {}).",
+                    report.feeds_preserved, report.rules_preserved, bdir_disp
+                ));
+            }
+        }
+
+        self.stamp_version_metadata(app_version)?;
+        if report.upgraded
+            || report.recovered_from_toml
+            || needs_initial_rolling_toml
+            || seed_defaults
+        {
+            write_rolling_toml_snapshot(self);
+        }
+
+        if let Ok(mut g) = self.last_upgrade.write() {
+            *g = report;
+        }
+        Ok(())
+    }
+
+    fn stamp_version_metadata(&self, app_version: &str) -> Result<(), String> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('app_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            &[app_version.into()],
+        )?;
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            &[SCHEMA_VERSION.to_string().into()],
+        )?;
+        Ok(())
+    }
+
+    fn init_schema_and_verify(&self) -> Result<(), String> {
+        self.init_schema()?;
+        let conn = self.connect()?;
+        let qc = conn.query_rows("PRAGMA quick_check(1)", &[])?;
+        if let Some(first) = qc.first() {
+            let status = first
+                .values()
+                .next()
+                .and_then(|v| v.as_str())
+                .unwrap_or("ok");
+            if !status.eq_ignore_ascii_case("ok") {
+                return Err(format!("SQLite integrity check failed: {status}"));
+            }
+        }
+        // Verify all expected columns on core tables are selectable
+        conn.query_rows(
+            "SELECT id, title, url, category, tags_json, enabled, last_fetched_at, last_error, created_at FROM feeds LIMIT 1",
+            &[],
+        )?;
+        conn.query_rows(
+            "SELECT id, name, query_type, instructions, criteria_json, weight, enabled, created_at FROM queries LIMIT 1",
+            &[],
+        )?;
+        conn.query_rows(
+            "SELECT id, entry_uid, feed_id, journal_title, title, link, authors, published_at, summary, status, archived_at, evaluated_at, created_at FROM entries LIMIT 1",
+            &[],
+        )?;
+        conn.query_rows(
+            "SELECT entry_id, query_id, normalized_score, query_snapshot_json, raw_response_json, evaluated_at FROM entry_scores LIMIT 1",
+            &[],
+        )?;
         Ok(())
     }
 
@@ -576,8 +814,11 @@ impl Database {
                 now.into(),
             ],
         )?;
-        self.get_feed(feed_id)?
-            .ok_or_else(|| "Failed to retrieve created feed".to_string())
+        let res = self
+            .get_feed(feed_id)?
+            .ok_or_else(|| "Failed to retrieve created feed".to_string())?;
+        write_rolling_toml_snapshot(self);
+        Ok(res)
     }
 
     pub fn update_feed(
@@ -643,7 +884,9 @@ impl Database {
                 feed_id.into(),
             ],
         )?;
-        self.get_feed(feed_id)
+        let res = self.get_feed(feed_id)?;
+        write_rolling_toml_snapshot(self);
+        Ok(res)
     }
 
     pub fn upsert_feed(
@@ -690,6 +933,9 @@ impl Database {
     pub fn delete_feed(&self, feed_id: i64) -> Result<bool, String> {
         let conn = self.connect()?;
         let changes = conn.execute("DELETE FROM feeds WHERE id = ?", &[feed_id.into()])?;
+        if changes > 0 {
+            write_rolling_toml_snapshot(self);
+        }
         Ok(changes > 0)
     }
 
@@ -699,6 +945,9 @@ impl Database {
             "DELETE FROM feeds WHERE LOWER(url) = LOWER(?)",
             &[url.trim().into()],
         )?;
+        if changes > 0 {
+            write_rolling_toml_snapshot(self);
+        }
         Ok(changes > 0)
     }
 
@@ -820,8 +1069,11 @@ impl Database {
                 now.into(),
             ],
         )?;
-        self.get_query(qid)?
-            .ok_or_else(|| "Failed to retrieve created query".to_string())
+        let res = self
+            .get_query(qid)?
+            .ok_or_else(|| "Failed to retrieve created query".to_string())?;
+        write_rolling_toml_snapshot(self);
+        Ok(res)
     }
 
     pub fn update_query(
@@ -868,7 +1120,9 @@ impl Database {
                 query_id.into(),
             ],
         )?;
-        self.get_query(query_id)
+        let res = self.get_query(query_id)?;
+        write_rolling_toml_snapshot(self);
+        Ok(res)
     }
 
     pub fn upsert_query(
@@ -935,6 +1189,9 @@ impl Database {
     pub fn delete_query(&self, query_id: i64) -> Result<bool, String> {
         let conn = self.connect()?;
         let changes = conn.execute("DELETE FROM queries WHERE id = ?", &[query_id.into()])?;
+        if changes > 0 {
+            write_rolling_toml_snapshot(self);
+        }
         Ok(changes > 0)
     }
 
@@ -944,6 +1201,9 @@ impl Database {
             "DELETE FROM queries WHERE LOWER(name) = LOWER(?)",
             &[name.trim().into()],
         )?;
+        if changes > 0 {
+            write_rolling_toml_snapshot(self);
+        }
         Ok(changes > 0)
     }
 
@@ -952,6 +1212,15 @@ impl Database {
         let conn = self.connect()?;
         let rows = conn.query_rows("SELECT entry_uid FROM entries", &[])?;
         Ok(rows.iter().map(|r| val_str(r, "entry_uid")).collect())
+    }
+
+    pub fn get_known_entry_summaries(&self) -> Result<HashMap<String, String>, String> {
+        let conn = self.connect()?;
+        let rows = conn.query_rows("SELECT entry_uid, summary FROM entries", &[])?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (val_str(&r, "entry_uid"), val_str(&r, "summary")))
+            .collect())
     }
 
     fn row_to_entry_basic(row: &HashMap<String, Value>) -> Value {

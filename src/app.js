@@ -34,10 +34,14 @@ const state = {
   providers: [],
   activeProvider: null,
   workspace: {
+    app_version: "0.1.0",
     data_dir: "~/SmartRSSReader",
+    backups_dir: "~/SmartRSSReader/backups",
+    version_backups: [],
     skills_provisioned: true,
     files: [],
   },
+  upgradeNoticeShown: false,
   feeds: [],
   queries: [],
   activeEntries: [],
@@ -187,6 +191,43 @@ function updateCountsUI(counts) {
 
 // --- AI Skills & Workspace Info Frame ---
 
+function updateAppVersionAndBackupsUI(appVersion, upgradeReport) {
+  const ver = String(appVersion || state.workspace.app_version || "0.1.0").replace(/^v/i, "");
+  state.workspace.app_version = ver;
+
+  const aboutBadge = document.getElementById("app-version-badge");
+  const settingsBadge = document.getElementById("settings-version-badge");
+  if (aboutBadge) aboutBadge.textContent = `v${ver} Tauri`;
+  if (settingsBadge) settingsBadge.textContent = `v${ver}`;
+
+  const backupsSummary = document.getElementById("version-backups-summary");
+  if (backupsSummary) {
+    const dir = state.workspace.data_dir || "~/SmartRSSReader";
+    const backups = Array.isArray(state.workspace.version_backups)
+      ? state.workspace.version_backups
+      : [];
+    if (backups.length > 0) {
+      const names = backups
+        .slice(0, 4)
+        .map((b) => `<code>${escapeHtml(b.folder_name || "")}</code>`)
+        .join(", ");
+      backupsSummary.innerHTML = `Automatic version backups in <code>${escapeHtml(dir)}/backups/</code>: ${names} (DB + keys + TOML preserved).`;
+    } else {
+      backupsSummary.innerHTML = `Automatic upgrade protection active: previous DB, keys &amp; TOML rules are backed up to <code>${escapeHtml(dir)}/backups/v&lt;version&gt;/</code> before any new build upgrades.`;
+    }
+  }
+
+  if (
+    upgradeReport &&
+    upgradeReport.upgraded &&
+    upgradeReport.message &&
+    !state.upgradeNoticeShown
+  ) {
+    state.upgradeNoticeShown = true;
+    showToast(upgradeReport.message, "info");
+  }
+}
+
 function updateWorkspaceUI(ws) {
   if (!ws) return;
   state.workspace = { ...state.workspace, ...ws };
@@ -206,6 +247,7 @@ function updateWorkspaceUI(ws) {
       ? "✓ AI Skills Provisioned"
       : "⚠ Needs Re-sync";
   }
+  updateAppVersionAndBackupsUI(ws.app_version, ws.upgrade_report);
 }
 
 async function loadWorkspaceInfo() {
@@ -1134,6 +1176,9 @@ async function loadActiveEntries() {
     renderJournalFilterOptions("active");
   }
   updateCountsUI(data.counts);
+  if (data.app_version) {
+    updateAppVersionAndBackupsUI(data.app_version, data.upgrade_report);
+  }
 
   const container = document.getElementById("active-entries-list");
   if (state.activeEntries.length === 0) {
@@ -1178,6 +1223,9 @@ async function loadArchivedEntries() {
     renderJournalFilterOptions("archive");
   }
   updateCountsUI(data.counts);
+  if (data.app_version) {
+    updateAppVersionAndBackupsUI(data.app_version, data.upgrade_report);
+  }
 
   const container = document.getElementById("archived-entries-list");
   if (state.archivedEntries.length === 0) {
@@ -1779,6 +1827,9 @@ async function loadSettings() {
     state.activeProvider = data.active_provider;
   }
   updateCountsUI(data.counts);
+  if (data.app_version) {
+    updateAppVersionAndBackupsUI(data.app_version, data.upgrade_report);
+  }
   if (data.pruned_archived && data.pruned_archived > 0) {
     showToast(
       `Cleaned up ${data.pruned_archived} archived entry(s) older than 1 month.`,
