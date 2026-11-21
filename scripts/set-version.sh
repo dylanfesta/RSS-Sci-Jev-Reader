@@ -47,18 +47,40 @@ def read_cargo_version(text: str) -> str:
     return m.group(1)
 
 
+def to_tauri_msi_version(semver: str) -> str:
+    """Convert SemVer to a WiX MSI-compatible Tauri bundle version.
+
+    Tauri's Windows MSI (WiX) bundler requires any pre-release identifier in
+    `src-tauri/tauri.conf.json` to be numeric-only and <= 65535 (e.g.
+    `0.1.0-alpha.4` -> `0.1.0-4`). Stable versions (`0.2.0`) stay unchanged.
+    """
+    m = SEMVER_RE.match(semver)
+    if not m:
+        return semver
+    maj, min_, pat, pre = m.group(1), m.group(2), m.group(3), m.group(4)
+    if not pre:
+        return f"{maj}.{min_}.{pat}"
+    num_match = re.search(r"(\d+)$", pre)
+    if num_match:
+        num = int(num_match.group(1))
+        if 0 <= num <= 65535:
+            return f"{maj}.{min_}.{pat}-{num}"
+    return f"{maj}.{min_}.{pat}"
+
+
 cargo_text = cargo_toml.read_text(encoding="utf-8")
 current_cargo_ver = read_cargo_version(cargo_text)
 tauri_data = json.loads(tauri_conf.read_text(encoding="utf-8"))
 pkg_data = json.loads(package_json.read_text(encoding="utf-8"))
 current_tauri_ver = tauri_data.get("version", "")
 current_pkg_ver = pkg_data.get("version", "")
+expected_tauri_ver = to_tauri_msi_version(current_cargo_ver)
 
 if arg in ("", "--check", "check", "--current", "current"):
-    in_sync = (current_cargo_ver == current_tauri_ver == current_pkg_ver)
+    in_sync = (current_cargo_ver == current_pkg_ver and current_tauri_ver == expected_tauri_ver)
     print(f"Current SmartRSSReader version: {current_cargo_ver}")
     print(f"  src-tauri/Cargo.toml      : {current_cargo_ver}")
-    print(f"  src-tauri/tauri.conf.json : {current_tauri_ver}")
+    print(f"  src-tauri/tauri.conf.json : {current_tauri_ver} (expected {expected_tauri_ver} for WiX MSI)")
     print(f"  package.json              : {current_pkg_ver}")
     if not in_sync:
         print("Status: OUT OF SYNC", file=sys.stderr)
@@ -106,6 +128,7 @@ def compute_next_version(cur: str, spec: str) -> str:
 
 
 new_ver = compute_next_version(current_cargo_ver, arg)
+new_tauri_ver = to_tauri_msi_version(new_ver)
 
 # 1. Update src-tauri/Cargo.toml ([package] block only)
 new_cargo_text, count = re.subn(
@@ -118,18 +141,18 @@ if count != 1:
     raise SystemExit("Error: Failed to update [package] version in src-tauri/Cargo.toml")
 cargo_toml.write_text(new_cargo_text, encoding="utf-8")
 
-# 2. Update src-tauri/tauri.conf.json (preserving 2-space formatting)
+# 2. Update src-tauri/tauri.conf.json (preserving 2-space formatting; WiX MSI numeric prerelease)
 tauri_raw = tauri_conf.read_text(encoding="utf-8")
 new_tauri_raw, t_count = re.subn(
     r'("version"\s*:\s*")([^"]+)(")',
-    rf'\g<1>{new_ver}\g<3>',
+    rf'\g<1>{new_tauri_ver}\g<3>',
     tauri_raw,
     count=1,
 )
 if t_count == 1:
     tauri_conf.write_text(new_tauri_raw, encoding="utf-8")
 else:
-    tauri_data["version"] = new_ver
+    tauri_data["version"] = new_tauri_ver
     tauri_conf.write_text(json.dumps(tauri_data, indent=2) + "\n", encoding="utf-8")
 
 # 3. Update package.json
@@ -175,7 +198,7 @@ if cargo_lock.exists():
 print(f"Updated SmartRSSReader version: {current_cargo_ver} -> {new_ver}")
 print("  ✓ src-tauri/Cargo.toml")
 print("  ✓ src-tauri/Cargo.lock")
-print("  ✓ src-tauri/tauri.conf.json")
+print(f"  ✓ src-tauri/tauri.conf.json ({new_tauri_ver})")
 print("  ✓ package.json")
 print("  ✓ src/index.html")
 print(

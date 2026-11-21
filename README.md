@@ -34,12 +34,22 @@ No Rust or Node.js setup required—grab the pre-built installer for your operat
 | **macOS** (Intel) | [**⬇ Download `.dmg` (Intel x64)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_macOS_Intel.dmg) | — |
 | **Linux** (x86_64) | [**⬇ Download `.deb` (Ubuntu / Debian)**](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_amd64.deb) | [`.AppImage` (Universal)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_amd64.AppImage) · [`.rpm` (Fedora / RHEL)](https://github.com/dylanfesta/RSS-Sci-Jev-Reader/releases/latest/download/SmartRSSReader_Linux_x86_64.rpm) |
 
-<details>
-<summary><strong>First-launch notes (macOS Gatekeeper / Windows SmartScreen / Linux AppImage)</strong></summary>
+### macOS Installation Note (Gatekeeper / `xattr`)
 
-Because these alpha binaries are not code-signed with paid Apple/Microsoft developer certificates yet:
-- **macOS**: After dragging `SmartRSSReader.app` to `Applications`, right-click (Control-click) the app and choose **Open** (or run `xattr -cr /Applications/SmartRSSReader.app` if macOS reports it is "damaged" or from an unidentified developer).
-- **Windows**: If Windows Defender SmartScreen appears, click **More info** → **Run anyway**.
+Because these alpha binaries are not code-signed or notarized with a paid Apple Developer certificate yet, macOS Gatekeeper will block the app on first launch (or show a misleading *"SmartRSSReader is damaged and can't be opened"* message).
+
+To run SmartRSSReader on macOS:
+1. Open the downloaded `.dmg` and drag **`SmartRSSReader.app`** into your **`Applications`** folder.
+2. Open **Terminal** and remove the macOS quarantine attribute:
+   ```bash
+   xattr -cr /Applications/SmartRSSReader.app
+   ```
+3. Launch **SmartRSSReader** normally from **Applications**.
+
+<details>
+<summary><strong>First-launch notes for Windows & Linux</strong></summary>
+
+- **Windows**: Because the installer is not code-signed yet, if Windows Defender SmartScreen appears, click **More info** → **Run anyway**.
 - **Linux `.AppImage`**: Make the file executable before launching (`chmod +x SmartRSSReader_Linux_amd64.AppImage && ./SmartRSSReader_Linux_amd64.AppImage`).
 
 </details>
